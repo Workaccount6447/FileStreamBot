@@ -7,8 +7,8 @@ class LANG(object):
 <b>👋 Hᴇʏ, </b>{}\n 
 <b>I'ᴍ ᴛᴇʟᴇɢʀᴀᴍ ғɪʟᴇs sᴛʀᴇᴀᴍɪɴɢ ʙᴏᴛ ᴀs ᴡᴇʟʟ ᴅɪʀᴇᴄᴛ ʟɪɴᴋs ɢᴇɴᴇʀᴀᴛᴏʀ</b>\n
 <b>ᴡᴏʀᴋɪɴɢ ᴏɴ ᴄʜᴀɴɴᴇʟs ᴀɴᴅ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ</b>\n\n
-<b> <blockquote><b>‣ Fᴀsᴛ ᴀs ᴀ ʀᴏᴄᴋᴇᴛ ᴀɴᴅ ғᴇᴇʟɪɴɢ ᴀs ᴀ ᴋɪɴɢ sᴜᴄʜ ᴛʜᴀᴛ ᴍᴀᴅᴇ ʙʏ Rᴏʏᴀʟɪᴛʏ Bᴏᴛs 
-<a href='https://telegram.me/RoyalityBots'>ʀᴏʏᴀʟɪᴛʏ ʙᴏᴛꜱ</a></b></blockquote>
+<b> <blockquote><b>‣ 💥Fᴀsᴛ ᴀs ᴀ ʀᴏᴄᴋᴇᴛ🚀 ᴀɴᴅ ғᴇᴇʟɪɴɢ ᴀs ᴀ ᴋɪɴɢ👑 sᴜᴄʜ ᴛʜᴀᴛ ᴍᴀᴅᴇ ʙʏ 
+<a href='https://telegram.me/RoyalityBots'>ʀᴏʏᴀʟɪᴛʏ ʙᴏᴛꜱ👑</a></b></blockquote>
 """
 
     HELP_TEXT = """
