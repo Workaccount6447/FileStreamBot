@@ -18,31 +18,28 @@ db = Database(Telegram.DATABASE_URL, Telegram.SESSION_NAME)
 async def start(bot: Client, message: Message):
     if not await verify_user(bot, message):
         return
+
     usr_cmd = message.text.split("_")[-1]
 
     if usr_cmd == "/start":
-        if Telegram.START_PIC:
-            await message.reply_photo(
-                photo=Telegram.START_PIC,
-                caption=LANG.START_TEXT.format(message.from_user.mention, FileStream.username),
-                parse_mode=ParseMode.HTML,
-                reply_markup=BUTTON.START_BUTTONS
-            )
-        else:
-            await message.reply_text(
-                text=LANG.START_TEXT.format(message.from_user.mention, FileStream.username),
-                parse_mode=ParseMode.HTML,
-                disable_web_page_preview=True,
-                reply_markup=BUTTON.START_BUTTONS
-            )
+        await message.reply_text(
+            text=LANG.START_TEXT.format(message.from_user.mention, FileStream.username),
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True,
+            reply_markup=BUTTON.START_BUTTONS
+        )
+
     else:
         if "stream_" in message.text:
             try:
                 file_check = await db.get_file(usr_cmd)
                 file_id = str(file_check['_id'])
                 if file_id == usr_cmd:
-                    reply_markup, stream_text = await gen_linkx(m=message, _id=file_id,
-                                                                name=[FileStream.username, FileStream.fname])
+                    reply_markup, stream_text = await gen_linkx(
+                        m=message,
+                        _id=file_id,
+                        name=[FileStream.username, FileStream.fname]
+                    )
                     await message.reply_text(
                         text=stream_text,
                         parse_mode=ParseMode.HTML,
@@ -51,7 +48,7 @@ async def start(bot: Client, message: Message):
                         quote=True
                     )
 
-            except FIleNotFound as e:
+            except FIleNotFound:
                 await message.reply_text("File Not Found")
             except Exception as e:
                 await message.reply_text("Something Went Wrong")
@@ -63,8 +60,12 @@ async def start(bot: Client, message: Message):
                 db_id = str(file_check['_id'])
                 file_id = file_check['file_id']
                 file_name = file_check['file_name']
+
                 if db_id == usr_cmd:
-                    filex = await message.reply_cached_media(file_id=file_id, caption=f'**{file_name}**')
+                    filex = await message.reply_cached_media(
+                        file_id=file_id,
+                        caption=f'**{file_name}**'
+                    )
                     await asyncio.sleep(3600)
                     try:
                         await filex.delete()
@@ -72,14 +73,14 @@ async def start(bot: Client, message: Message):
                     except Exception:
                         pass
 
-            except FIleNotFound as e:
+            except FIleNotFound:
                 await message.reply_text("**File Not Found**")
             except Exception as e:
                 await message.reply_text("Something Went Wrong")
                 logging.error(e)
 
         else:
-            await message.reply_text(f"**Invalid Command**")
+            await message.reply_text("**Invalid Command**")
 
 @FileStream.on_message(filters.private & filters.command(["about"]))
 async def start(bot, message):
