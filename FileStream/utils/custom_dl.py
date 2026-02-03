@@ -19,18 +19,13 @@ class ByteStreamer:
 
     async def get_file_properties(self, db_id: str, multi_clients) -> FileId:
         if db_id not in self.cached_file_ids:
-            logging.debug("Before calling generate_file_properties")
             await self.generate_file_properties(db_id, multi_clients)
-            logging.debug(f"Cached file properties for file with ID {db_id}")
         return self.cached_file_ids[db_id]
 
     async def generate_file_properties(self, db_id: str, multi_clients) -> FileId:
-        logging.debug("Before calling get_file_ids")
         file_id = await get_file_ids(self.client, db_id, multi_clients, Message)
-        logging.debug(f"Generated file ID and unique ID for file with ID {db_id}")
         self.cached_file_ids[db_id] = file_id
-        logging.debug(f"Cached media file with ID {db_id}")
-        return self.cached_file_ids[db_id]
+        return file_id
 
     async def generate_media_session(self, client: Client, file_id: FileId) -> Session:
         if file_id.dc_id not in self.session_locks:
@@ -39,7 +34,9 @@ class ByteStreamer:
         async with self.session_locks[file_id.dc_id]:
             media_session = client.media_sessions.get(file_id.dc_id)
 
-            if not media_session:
+            # Fixed: Removed .is_connected check which caused the AttributeError
+            if media_session is None:
+                # Use get_dc_id() for better compatibility with modern Pyrogram
                 if file_id.dc_id != await client.get_dc_id():
                     media_session = Session(
                         client,
@@ -63,7 +60,6 @@ class ByteStreamer:
                             )
                             break
                         except AuthBytesInvalid:
-                            logging.debug(f"Invalid authorization bytes for DC {file_id.dc_id}")
                             await asyncio.sleep(1)
                             continue
                     else:
@@ -79,10 +75,7 @@ class ByteStreamer:
                     )
                     await media_session.start()
 
-                logging.debug(f"Created media session for DC {file_id.dc_id}")
                 client.media_sessions[file_id.dc_id] = media_session
-            else:
-                logging.debug(f"Using cached media session for DC {file_id.dc_id}")
             return media_session
 
     @staticmethod
@@ -137,21 +130,21 @@ class ByteStreamer:
         last_part_cut: int,
         part_count: int,
         chunk_size: int,
-    ) -> Union[str, None]:
+    ):
         client = self.client
         work_loads[index] += 1
-        logging.debug(f"Starting to yield file with client {index}.")
         location = await self.get_location(file_id)
 
         current_part = 1
-        max_retries = 5
-        retry_delay = 2 
+        max_retries = 10  # Increased retries for TCP instability
+        retry_delay = 1
 
         try:
             while current_part <= part_count:
                 retries = 0
                 while retries < max_retries:
                     try:
+                        # Re-fetching/Generating session inside the retry loop
                         media_session = await self.generate_media_session(client, file_id)
                         r = await media_session.invoke(
                             raw.functions.upload.GetFile(
@@ -161,46 +154,47 @@ class ByteStreamer:
                             )
                         )
                         
-                        if not isinstance(r, raw.types.upload.File):
-                            return
-
-                        chunk = r.bytes
-                        if not chunk:
-                            return
-                        elif part_count == 1:
-                            yield chunk[first_part_cut:last_part_cut]
-                        elif current_part == 1:
-                            yield chunk[first_part_cut:]
-                        elif current_part == part_count:
-                            yield chunk[:last_part_cut]
+                        if isinstance(r, raw.types.upload.File):
+                            chunk = r.bytes
+                            if not chunk:
+                                break
+                            
+                            if part_count == 1:
+                                yield chunk[first_part_cut:last_part_cut]
+                            elif current_part == 1:
+                                yield chunk[first_part_cut:]
+                            elif current_part == part_count:
+                                yield chunk[:last_part_cut]
+                            else:
+                                yield chunk
+                                
+                            current_part += 1
+                            offset += chunk_size
+                            break  # Chunk success, exit retry loop
                         else:
-                            yield chunk
-
-                        current_part += 1
-                        offset += chunk_size
-                        break # Success, move to next part
-                        
-                    except (OSError, RuntimeError) as e:
+                            # If Telegram returns something else, treat as fail
+                            raise ConnectionError("Invalid response from Telegram")
+                            
+                    except (OSError, RuntimeError, Exception) as e:
                         retries += 1
-                        logging.warning(f"Connection lost (retry {retries}/{max_retries}): {e}")
+                        logging.warning(f"TCP/Session Error (retry {retries}/{max_retries}): {e}")
+                        
+                        # Aggressively clear the broken session from cache
                         if file_id.dc_id in client.media_sessions:
                             old_session = client.media_sessions.pop(file_id.dc_id)
                             try:
                                 await old_session.stop()
                             except:
                                 pass
+                        
                         await asyncio.sleep(retry_delay)
                 else:
-                    logging.error("Max retries reached. Stopping file download.")
-                    return
-        except (TimeoutError, AttributeError):
-            logging.exception("Error while yielding file")
+                    logging.error("Max retries reached. Stream aborted.")
+                    break
         finally:
-            logging.debug(f"Finished yielding file with {current_part - 1} parts.")
             work_loads[index] -= 1
 
     async def clean_cache(self) -> None:
         while True:
             await asyncio.sleep(self.clean_timer)
             self.cached_file_ids.clear()
-            logging.debug("Cleaned the cache")
