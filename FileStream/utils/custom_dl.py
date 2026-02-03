@@ -12,6 +12,7 @@ from pyrogram.types import Message
 
 class ByteStreamer:
     def __init__(self, client: Client):
+        self.client = client
         self.clean_timer = 30 * 60
         self.client: Client = client
         self.cached_file_ids: Dict[str, FileId] = {}
