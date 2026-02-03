@@ -10,11 +10,11 @@ from pyrogram.file_id import FileId, FileType, ThumbnailSource
 from pyrogram.types import Message
 
 class ByteStreamer:
-def init(self, client: Client):
-self.clean_timer = 30 * 60
-self.client: Client = client
-self.cached_file_ids: Dict[str, FileId] = {}
-asyncio.create_task(self.clean_cache())
+    def __init__(self, client: Client):
+        self.clean_timer = 30 * 60
+        self.client: Client = client
+        self.cached_file_ids: Dict[str, FileId] = {}
+        asyncio.create_task(self.clean_cache())
 
 async def get_file_properties(self, db_id: str, multi_clients) -> FileId:  
     if db_id not in self.cached_file_ids:  
