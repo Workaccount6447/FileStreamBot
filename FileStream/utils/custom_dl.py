@@ -9,12 +9,12 @@ from pyrogram.errors import AuthBytesInvalid
 from pyrogram.file_id import FileId, FileType, ThumbnailSource
 from pyrogram.types import Message
 
-
 class ByteStreamer:
     def __init__(self, client: Client):
         self.clean_timer = 30 * 60
         self.client: Client = client
         self.cached_file_ids: Dict[str, FileId] = {}
+        self.session_locks: Dict[int, asyncio.Lock] = {}
         asyncio.create_task(self.clean_cache())
 
     async def get_file_properties(self, db_id: str, multi_clients) -> FileId:
@@ -33,53 +33,57 @@ class ByteStreamer:
         return self.cached_file_ids[db_id]
 
     async def generate_media_session(self, client: Client, file_id: FileId) -> Session:
-        media_session = client.media_sessions.get(file_id.dc_id)
+        if file_id.dc_id not in self.session_locks:
+            self.session_locks[file_id.dc_id] = asyncio.Lock()
 
-        if not media_session:
-            if file_id.dc_id != await client.storage.dc_id():
-                media_session = Session(
-                    client,
-                    file_id.dc_id,
-                    await Auth(client, file_id.dc_id, await client.storage.test_mode()).create(),
-                    await client.storage.test_mode(),
-                    is_media=True,
-                )
-                await media_session.start()
+        async with self.session_locks[file_id.dc_id]:
+            media_session = client.media_sessions.get(file_id.dc_id)
 
-                for _ in range(6):
-                    exported_auth = await client.invoke(
-                        raw.functions.auth.ExportAuthorization(dc_id=file_id.dc_id)
+            if not media_session:
+                if file_id.dc_id != await client.get_dc_id():
+                    media_session = Session(
+                        client,
+                        file_id.dc_id,
+                        await Auth(client, file_id.dc_id, await client.storage.test_mode()).create(),
+                        await client.storage.test_mode(),
+                        is_media=True,
                     )
-                    try:
-                        await media_session.invoke(
-                            raw.functions.auth.ImportAuthorization(
-                                id=exported_auth.id,
-                                bytes=exported_auth.bytes
-                            )
-                        )
-                        break
-                    except AuthBytesInvalid:
-                        logging.debug(f"Invalid authorization bytes for DC {file_id.dc_id}")
-                        await asyncio.sleep(1)
-                        continue
-                else:
-                    await media_session.stop()
-                    raise AuthBytesInvalid
-            else:
-                media_session = Session(
-                    client,
-                    file_id.dc_id,
-                    await client.storage.auth_key(),
-                    await client.storage.test_mode(),
-                    is_media=True,
-                )
-                await media_session.start()
+                    await media_session.start()
 
-            logging.debug(f"Created media session for DC {file_id.dc_id}")
-            client.media_sessions[file_id.dc_id] = media_session
-        else:
-            logging.debug(f"Using cached media session for DC {file_id.dc_id}")
-        return media_session
+                    for _ in range(6):
+                        exported_auth = await client.invoke(
+                            raw.functions.auth.ExportAuthorization(dc_id=file_id.dc_id)
+                        )
+                        try:
+                            await media_session.invoke(
+                                raw.functions.auth.ImportAuthorization(
+                                    id=exported_auth.id,
+                                    bytes=exported_auth.bytes
+                                )
+                            )
+                            break
+                        except AuthBytesInvalid:
+                            logging.debug(f"Invalid authorization bytes for DC {file_id.dc_id}")
+                            await asyncio.sleep(1)
+                            continue
+                    else:
+                        await media_session.stop()
+                        raise AuthBytesInvalid
+                else:
+                    media_session = Session(
+                        client,
+                        file_id.dc_id,
+                        await client.storage.auth_key(),
+                        await client.storage.test_mode(),
+                        is_media=True,
+                    )
+                    await media_session.start()
+
+                logging.debug(f"Created media session for DC {file_id.dc_id}")
+                client.media_sessions[file_id.dc_id] = media_session
+            else:
+                logging.debug(f"Using cached media session for DC {file_id.dc_id}")
+            return media_session
 
     @staticmethod
     async def get_location(file_id: FileId) -> Union[
@@ -137,18 +141,18 @@ class ByteStreamer:
         client = self.client
         work_loads[index] += 1
         logging.debug(f"Starting to yield file with client {index}.")
-        media_session = await self.generate_media_session(client, file_id)
         location = await self.get_location(file_id)
 
         current_part = 1
         max_retries = 5
-        retry_delay = 2  # seconds
+        retry_delay = 2 
 
         try:
-            while True:
+            while current_part <= part_count:
                 retries = 0
                 while retries < max_retries:
                     try:
+                        media_session = await self.generate_media_session(client, file_id)
                         r = await media_session.invoke(
                             raw.functions.upload.GetFile(
                                 location=location,
@@ -156,41 +160,43 @@ class ByteStreamer:
                                 limit=chunk_size
                             )
                         )
-                        break
-                    except OSError as e:
+                        
+                        if not isinstance(r, raw.types.upload.File):
+                            return
+
+                        chunk = r.bytes
+                        if not chunk:
+                            return
+                        elif part_count == 1:
+                            yield chunk[first_part_cut:last_part_cut]
+                        elif current_part == 1:
+                            yield chunk[first_part_cut:]
+                        elif current_part == part_count:
+                            yield chunk[:last_part_cut]
+                        else:
+                            yield chunk
+
+                        current_part += 1
+                        offset += chunk_size
+                        break # Success, move to next part
+                        
+                    except (OSError, RuntimeError) as e:
                         retries += 1
                         logging.warning(f"Connection lost (retry {retries}/{max_retries}): {e}")
+                        if file_id.dc_id in client.media_sessions:
+                            old_session = client.media_sessions.pop(file_id.dc_id)
+                            try:
+                                await old_session.stop()
+                            except:
+                                pass
                         await asyncio.sleep(retry_delay)
-                        # Reconnect media session if lost
-                        media_session = await self.generate_media_session(client, file_id)
                 else:
                     logging.error("Max retries reached. Stopping file download.")
                     return
-
-                if not isinstance(r, raw.types.upload.File):
-                    break
-
-                chunk = r.bytes
-                if not chunk:
-                    break
-                elif part_count == 1:
-                    yield chunk[first_part_cut:last_part_cut]
-                elif current_part == 1:
-                    yield chunk[first_part_cut:]
-                elif current_part == part_count:
-                    yield chunk[:last_part_cut]
-                else:
-                    yield chunk
-
-                current_part += 1
-                offset += chunk_size
-
-                if current_part > part_count:
-                    break
         except (TimeoutError, AttributeError):
             logging.exception("Error while yielding file")
         finally:
-            logging.debug(f"Finished yielding file with {current_part} parts.")
+            logging.debug(f"Finished yielding file with {current_part - 1} parts.")
             work_loads[index] -= 1
 
     async def clean_cache(self) -> None:
