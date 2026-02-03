@@ -34,9 +34,8 @@ class ByteStreamer:
         async with self.session_locks[file_id.dc_id]:
             media_session = client.media_sessions.get(file_id.dc_id)
 
-            # Fixed: Removed .is_connected check which caused the AttributeError
+            # FIXED: Check if session exists without calling .is_connected
             if media_session is None:
-                # Use get_dc_id() for better compatibility with modern Pyrogram
                 if file_id.dc_id != await client.get_dc_id():
                     media_session = Session(
                         client,
@@ -78,49 +77,6 @@ class ByteStreamer:
                 client.media_sessions[file_id.dc_id] = media_session
             return media_session
 
-    @staticmethod
-    async def get_location(file_id: FileId) -> Union[
-        raw.types.InputPhotoFileLocation,
-        raw.types.InputDocumentFileLocation,
-        raw.types.InputPeerPhotoFileLocation,
-    ]:
-        file_type = file_id.file_type
-
-        if file_type == FileType.CHAT_PHOTO:
-            if file_id.chat_id > 0:
-                peer = raw.types.InputPeerUser(
-                    user_id=file_id.chat_id, access_hash=file_id.chat_access_hash
-                )
-            else:
-                if file_id.chat_access_hash == 0:
-                    peer = raw.types.InputPeerChat(chat_id=-file_id.chat_id)
-                else:
-                    peer = raw.types.InputPeerChannel(
-                        channel_id=utils.get_channel_id(file_id.chat_id),
-                        access_hash=file_id.chat_access_hash,
-                    )
-            location = raw.types.InputPeerPhotoFileLocation(
-                peer=peer,
-                volume_id=file_id.volume_id,
-                local_id=file_id.local_id,
-                big=file_id.thumbnail_source == ThumbnailSource.CHAT_PHOTO_BIG,
-            )
-        elif file_type == FileType.PHOTO:
-            location = raw.types.InputPhotoFileLocation(
-                id=file_id.media_id,
-                access_hash=file_id.access_hash,
-                file_reference=file_id.file_reference,
-                thumb_size=file_id.thumbnail_size,
-            )
-        else:
-            location = raw.types.InputDocumentFileLocation(
-                id=file_id.media_id,
-                access_hash=file_id.access_hash,
-                file_reference=file_id.file_reference,
-                thumb_size=file_id.thumbnail_size,
-            )
-        return location
-
     async def yield_file(
         self,
         file_id: FileId,
@@ -136,7 +92,7 @@ class ByteStreamer:
         location = await self.get_location(file_id)
 
         current_part = 1
-        max_retries = 10  # Increased retries for TCP instability
+        max_retries = 10 
         retry_delay = 1
 
         try:
@@ -144,7 +100,6 @@ class ByteStreamer:
                 retries = 0
                 while retries < max_retries:
                     try:
-                        # Re-fetching/Generating session inside the retry loop
                         media_session = await self.generate_media_session(client, file_id)
                         r = await media_session.invoke(
                             raw.functions.upload.GetFile(
@@ -156,8 +111,7 @@ class ByteStreamer:
                         
                         if isinstance(r, raw.types.upload.File):
                             chunk = r.bytes
-                            if not chunk:
-                                break
+                            if not chunk: break
                             
                             if part_count == 1:
                                 yield chunk[first_part_cut:last_part_cut]
@@ -170,29 +124,43 @@ class ByteStreamer:
                                 
                             current_part += 1
                             offset += chunk_size
-                            break  # Chunk success, exit retry loop
+                            break 
                         else:
-                            # If Telegram returns something else, treat as fail
-                            raise ConnectionError("Invalid response from Telegram")
+                            raise ConnectionError("Empty Telegram Response")
                             
                     except (OSError, RuntimeError, Exception) as e:
                         retries += 1
-                        logging.warning(f"TCP/Session Error (retry {retries}/{max_retries}): {e}")
-                        
-                        # Aggressively clear the broken session from cache
+                        logging.warning(f"TCP Fail (Retry {retries}): {e}")
+                        # Force drop broken session
                         if file_id.dc_id in client.media_sessions:
                             old_session = client.media_sessions.pop(file_id.dc_id)
                             try:
                                 await old_session.stop()
                             except:
                                 pass
-                        
                         await asyncio.sleep(retry_delay)
                 else:
-                    logging.error("Max retries reached. Stream aborted.")
                     break
         finally:
             work_loads[index] -= 1
+
+    @staticmethod
+    async def get_location(file_id: FileId):
+        file_type = file_id.file_type
+        if file_type == FileType.CHAT_PHOTO:
+            if file_id.chat_id > 0:
+                peer = raw.types.InputPeerUser(user_id=file_id.chat_id, access_hash=file_id.chat_access_hash)
+            else:
+                if file_id.chat_access_hash == 0:
+                    peer = raw.types.InputPeerChat(chat_id=-file_id.chat_id)
+                else:
+                    peer = raw.types.InputPeerChannel(channel_id=utils.get_channel_id(file_id.chat_id), access_hash=file_id.chat_access_hash)
+            location = raw.types.InputPeerPhotoFileLocation(peer=peer, volume_id=file_id.volume_id, local_id=file_id.local_id, big=file_id.thumbnail_source == ThumbnailSource.CHAT_PHOTO_BIG)
+        elif file_type == FileType.PHOTO:
+            location = raw.types.InputPhotoFileLocation(id=file_id.media_id, access_hash=file_id.access_hash, file_reference=file_id.file_reference, thumb_size=file_id.thumbnail_size)
+        else:
+            location = raw.types.InputDocumentFileLocation(id=file_id.media_id, access_hash=file_id.access_hash, file_reference=file_id.file_reference, thumb_size=file_id.thumbnail_size)
+        return location
 
     async def clean_cache(self) -> None:
         while True:
