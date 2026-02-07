@@ -71,7 +71,7 @@ class BUTTON(object):
         [
             InlineKeyboardButton(
                 "📢 ᴜᴘᴅᴀᴛᴇ ᴄʜᴀɴɴᴇʟ",
-                url=f'https://t.me/{Telegram.UPDATES_CHANNEL}'
+                url=f'https://t.me/RoyalityBots'
             )
         ]]
     )
@@ -85,7 +85,7 @@ class BUTTON(object):
         [
             InlineKeyboardButton(
                 "📢 ᴜᴘᴅᴀᴛᴇ ᴄʜᴀɴɴᴇʟ",
-                url=f'https://t.me/{Telegram.UPDATES_CHANNEL}'
+                url=f'https://t.me/RoyalityBots'
             )
         ]]
     )
@@ -99,7 +99,7 @@ class BUTTON(object):
         [
             InlineKeyboardButton(
                 "📢 ᴜᴘᴅᴀᴛᴇ ᴄʜᴀɴɴᴇʟ",
-                url=f'https://t.me/{Telegram.UPDATES_CHANNEL}'
+                url=f'https://t.me/RoyalityBots'
             )
         ]]
     )
