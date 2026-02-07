@@ -18,6 +18,10 @@ db = Database(Telegram.DATABASE_URL, Telegram.SESSION_NAME)
 
 @FileStream.on_message(filters.command('start') & filters.private)
 
+
+
+async def start(bot: Client, message: Message):
+
 emoji_msg = await message.reply_text("👋")
 await asyncio.sleep(3)
 try:
@@ -25,7 +29,6 @@ try:
 except:
     pass
 
-async def start(bot: Client, message: Message):
     if not await verify_user(bot, message):
         return
 
