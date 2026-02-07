@@ -1,33 +1,32 @@
 import logging
 import math
-from FileStream import __version__
-from FileStream.bot import FileStream
-from FileStream.server.exceptions import FIleNotFound
-from FileStream.utils.bot_utils import gen_linkx, verify_user
-from FileStream.config import Telegram
-from FileStream.utils.database import Database
-from FileStream.utils.translation import LANG, BUTTON
+import asyncio
 from pyrogram import filters, Client
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
 from pyrogram.enums.parse_mode import ParseMode
-import asyncio
-from pyrogram.types import LabeledPrice, PreCheckoutQuery
-from FileStream import donate
+
+from FileStream import __version__, donate
+from FileStream.bot import FileStream
+from FileStream.config import Telegram
+from FileStream.server.exceptions import FIleNotFound
+from FileStream.utils.bot_utils import gen_linkx, verify_user
+from FileStream.utils.database import Database
+from FileStream.utils.translation import LANG, BUTTON
 
 db = Database(Telegram.DATABASE_URL, Telegram.SESSION_NAME)
 
+
+# --------------------- START COMMAND ---------------------
 @FileStream.on_message(filters.command('start') & filters.private)
-
-
-
 async def start(bot: Client, message: Message):
 
-emoji_msg = await message.reply_text("👋")
-await asyncio.sleep(3)
-try:
-    await emoji_msg.delete()
-except:
-    pass
+    emoji_msg = await message.reply_text("👋")
+    await asyncio.sleep(3)
+
+    try:
+        await emoji_msg.delete()
+    except:
+        pass
 
     if not await verify_user(bot, message):
         return
@@ -47,6 +46,7 @@ except:
             try:
                 file_check = await db.get_file(usr_cmd)
                 file_id = str(file_check['_id'])
+
                 if file_id == usr_cmd:
                     reply_markup, stream_text = await gen_linkx(
                         m=message,
@@ -95,8 +95,10 @@ except:
         else:
             await message.reply_text("**Invalid Command**")
 
+
+# --------------------- ABOUT COMMAND ---------------------
 @FileStream.on_message(filters.private & filters.command(["about"]))
-async def start(bot, message):
+async def about(bot, message):
     if not await verify_user(bot, message):
         return
 
@@ -107,10 +109,13 @@ async def start(bot, message):
         reply_markup=BUTTON.ABOUT_BUTTONS
     )
 
-@FileStream.on_message((filters.command('help')) & filters.private)
+
+# --------------------- HELP COMMAND ---------------------
+@FileStream.on_message(filters.command('help') & filters.private)
 async def help_handler(bot, message):
     if not await verify_user(bot, message):
         return
+
     if Telegram.START_PIC:
         await message.reply_photo(
             photo=Telegram.START_PIC,
@@ -126,8 +131,8 @@ async def help_handler(bot, message):
             reply_markup=BUTTON.HELP_BUTTONS
         )
 
-# ---------------------------------------------------------------------------------------------------
 
+# --------------------- FILES COMMAND ---------------------
 @FileStream.on_message(filters.command('files') & filters.private)
 async def my_files(bot: Client, message: Message):
     if not await verify_user(bot, message):
