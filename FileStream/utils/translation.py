@@ -25,6 +25,18 @@ class LANG(object):
 <b>✦ ᴅᴇᴠᴇʟᴏᴘᴇʀ : <a href='https://telegram.me/RoyalityBots'>Royality Bots</a></b>\n
 """
 
+DONATE_TEXT = """
+<b>⭐ Support This Project</b>
+
+<b>You can support this bot using Telegram Stars.</b>
+
+• Official Telegram payment  
+• Instant receipt  
+• Safe & secure  
+
+<i>Click ⭐ Donate to proceed</i>
+"""
+
     STREAM_TEXT = """
 <i><u>𝗬𝗼𝘂𝗿 𝗟𝗶𝗻𝗸 𝗚𝗲𝗻𝗲𝗿𝗮𝘁𝗲𝗱 !</u></i>\n
 <b>📂 Fɪʟᴇ ɴᴀᴍᴇ :</b> <b>{}</b>\n
@@ -49,11 +61,17 @@ class BUTTON(object):
         [[
             InlineKeyboardButton('ʜᴇʟᴘ', callback_data='help'),
             InlineKeyboardButton('ᴀʙᴏᴜᴛ', callback_data='about'),
+            InlineKeyboardButton('⭐ ᴅᴏɴᴀᴛᴇ', callback_data='donate'),
             InlineKeyboardButton('ᴄʟᴏsᴇ', callback_data='close')
         ],
-            [InlineKeyboardButton("📢 ᴜᴘᴅᴀᴛᴇ ᴄʜᴀɴɴᴇʟ", url=f'https://t.me/{Telegram.UPDATES_CHANNEL}')]
-        ]
+        [
+            InlineKeyboardButton(
+                "📢 ᴜᴘᴅᴀᴛᴇ ᴄʜᴀɴɴᴇʟ",
+                url=f'https://t.me/{Telegram.UPDATES_CHANNEL}'
+            )
+        ]]
     )
+
     HELP_BUTTONS = InlineKeyboardMarkup(
         [[
             InlineKeyboardButton('ʜᴏᴍᴇ', callback_data='home'),
