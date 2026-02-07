@@ -2,7 +2,7 @@ from pyrogram import Client, filters
 from pyrogram.types import LabeledPrice
 from datetime import datetime
 
-OWNER_ID = 123456789  # 🔴 CHANGE THIS
+OWNER_ID = 8420494874  # 🔴 CHANGE THIS
 
 
 # ⭐ User clicked Donate (about to pay)
