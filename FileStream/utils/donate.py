@@ -4,6 +4,13 @@ from datetime import datetime
 
 OWNER_ID = 8420494874  # 🔴 CHANGE THIS
 
+from pyrogram import filters
+from FileStream.bot import FileStream
+
+@FileStream.on_callback_query()
+async def _test_callback(_, q):
+    await q.answer("Callback received ✅", show_alert=True)
+
 
 # ⭐ User clicked Donate (about to pay)
 @Client.on_callback_query(filters.regex("^donate$"))
