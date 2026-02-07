@@ -5,7 +5,8 @@ from pyrogram import filters, Client
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
 from pyrogram.enums.parse_mode import ParseMode
 
-from FileStream import __version__, donate
+from FileStream import __version__
+from FileStream.utils import donate
 from FileStream.bot import FileStream
 from FileStream.config import Telegram
 from FileStream.server.exceptions import FIleNotFound
