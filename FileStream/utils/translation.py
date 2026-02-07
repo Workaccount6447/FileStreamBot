@@ -65,7 +65,6 @@ class BUTTON(object):
         [[
             InlineKeyboardButton('ʜᴇʟᴘ', callback_data='help'),
             InlineKeyboardButton('ᴀʙᴏᴜᴛ', callback_data='about'),
-            InlineKeyboardButton('⭐ ᴅᴏɴᴀᴛᴇ', callback_data='donate'),
             InlineKeyboardButton('ᴄʟᴏsᴇ', callback_data='close')
         ],
         [
