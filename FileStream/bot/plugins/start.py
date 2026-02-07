@@ -12,6 +12,7 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
 from pyrogram.enums.parse_mode import ParseMode
 import asyncio
 from pyrogram.types import LabeledPrice, PreCheckoutQuery
+from FileStream import donate
 
 db = Database(Telegram.DATABASE_URL, Telegram.SESSION_NAME)
 
