@@ -11,10 +11,19 @@ from pyrogram import filters, Client
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
 from pyrogram.enums.parse_mode import ParseMode
 import asyncio
+from pyrogram.types import LabeledPrice, PreCheckoutQuery
 
 db = Database(Telegram.DATABASE_URL, Telegram.SESSION_NAME)
 
 @FileStream.on_message(filters.command('start') & filters.private)
+
+emoji_msg = await message.reply_text("👋")
+await asyncio.sleep(3)
+try:
+    await emoji_msg.delete()
+except:
+    pass
+
 async def start(bot: Client, message: Message):
     if not await verify_user(bot, message):
         return
