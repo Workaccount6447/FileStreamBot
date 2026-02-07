@@ -26,13 +26,17 @@ class LANG(object):
 """
 
 DONATE_TEXT = """
-<b>⭐ Support This Project</b>
+<b>⭐ Support This Project</b>\n\n
 
-<b>You can support this bot using Telegram Stars.</b>
+<b>Help me to motivate and buy me a glass of tea ( I don't drink coffee) </b>\n\n
 
-• Official Telegram payment  
-• Instant receipt  
-• Safe & secure  
+• Helps me to designed a new Advanced bot\n
+• Helps me to be Motivated\n
+• Helps me to maintained server \n\n
+
+Your small ammount can motivate me a lot .\n\n
+
+Thanks 
 
 <i>Click ⭐ Donate to proceed</i>
 """
