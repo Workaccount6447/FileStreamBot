@@ -7,79 +7,66 @@ import traceback
 
 OWNER_ID = Telegram.OWNER_ID
 
-# --- 1. MANDATORY: PRE-CHECKOUT HANDLER ---
-# Telegram requires the bot to confirm it can fulfill the order.
-# Without this 'ok=True' answer, the payment window will fail.
+# --- 1. MANDATORY PRE-CHECKOUT HANDLER ---
+# Without this 'ok=True' response, the 'Pay' button will fail.
 @FileStream.on_pre_checkout_query()
 async def pre_checkout_handler(_, query):
     await query.answer(ok=True)
 
 
-# --- 2. DONATE BUTTON LOGIC ---
+# --- 2. DONATION MENU (Choose amount) ---
 @FileStream.on_callback_query(filters.regex("^donate$"))
-async def donate_callback(_, query):
+async def donate_menu(_, query):
+    text = "<b>⭐ Support This Project</b>\n\nSelect an amount to donate via Telegram Stars:"
+    buttons = [
+        [InlineKeyboardButton("⭐ 5 Stars", callback_data="pay_5")],
+        [
+            InlineKeyboardButton("+5 ⭐", callback_data="pay_10"),
+            InlineKeyboardButton("+10 ⭐", callback_data="pay_15"),
+            InlineKeyboardButton("+15 ⭐", callback_data="pay_20")
+        ],
+        [InlineKeyboardButton("⬅️ Back", callback_data="home")]
+    ]
+    await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
+
+
+# --- 3. INVOICE GENERATOR (The Bill) ---
+# Triggers after the user selects an amount from the menu above
+@FileStream.on_callback_query(filters.regex(r"^pay_(\d+)$"))
+async def send_donation_invoice(_, query):
     try:
-        await query.answer("Opening Telegram Stars ⭐")
+        # Extract the amount from callback_data (e.g., pay_5 -> 5)
+        amount = int(query.data.split("_")[1])
+        await query.answer(f"Opening Star Invoice for {amount} ⭐")
 
-        # Notify owner that someone clicked the button
-        try:
-            await _.send_message(
-                OWNER_ID,
-                f"<b>⭐ Donation Started</b>\n\n<b>User:</b> {query.from_user.mention}\n<b>ID:</b> <code>{query.from_user.id}</code>"
-            )
-        except Exception:
-            pass
-
-        # send_invoice for Stars (XTR)
-        # We OMIT 'provider_token' entirely for Stars payments.
+        # FIX: We OMIT provider_token entirely for XTR
+        # FIX: prices contains exactly ONE item for Stars
         await _.send_invoice(
             chat_id=query.from_user.id,
-            title="⭐ Support Royality Bots",
+            title=f"⭐ Support ({amount} Stars)",
             description="Support development & server costs ❤️",
-            payload=f"donate_{query.from_user.id}",
+            payload=f"donate_{query.from_user.id}_{amount}",
             currency="XTR",
-            prices=[
-                # Telegram Stars prices are integers (e.g., 50 = 50 Stars)
-                LabeledPrice("⭐ Small Support", 50),
-                LabeledPrice("⭐⭐ Medium Support", 100),
-                LabeledPrice("⭐⭐⭐ Big Support", 250),
-            ],
+            prices=[LabeledPrice("Donation", amount)],
             start_parameter="donate-stars"
         )
 
     except Exception as e:
-        print("❌ DONATE ERROR:", e)
+        print(f"❌ INVOICE ERROR: {e}")
         traceback.print_exc()
-        await query.message.reply_text("❌ Donation failed to initialize. Please ensure your Telegram app is updated.")
+        await query.answer("❌ Error creating invoice. Update your app.", show_alert=True)
 
 
-# --- 3. SUCCESSFUL PAYMENT HANDLER ---
+# --- 4. SUCCESSFUL PAYMENT HANDLER ---
 @FileStream.on_message(filters.successful_payment)
 async def payment_success(_, message):
     try:
         p = message.successful_payment
+        receipt = f"<b>⭐ Payment Successful!</b>\n\n<b>Amount:</b> {p.total_amount} Stars\n<b>ID:</b> <code>{p.telegram_payment_charge_id}</code>"
+        
+        await message.reply_text(receipt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅ Back", callback_data="home")]]))
 
-        receipt = f"""
-<b>⭐ Payment Successful!</b>
-
-<b>Amount:</b> {p.total_amount} Stars
-<b>Transaction ID:</b> <code>{p.telegram_payment_charge_id}</code>
-
-<b>Date:</b> {datetime.utcnow().strftime('%d %b %Y | %H:%M UTC')}
-"""
-        await message.reply_text(
-            receipt,
-            reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("⬅ Back", callback_data="home")]]
-            )
-        )
-
-        # Notify owner of actual money received
-        await _.send_message(
-            OWNER_ID,
-            f"<b>💰 Donation Received!</b>\n\n<b>Amount:</b> {p.total_amount} Stars\n<b>From:</b> {message.from_user.mention}"
-        )
-
+        # Notify owner
+        await _.send_message(OWNER_ID, f"<b>💰 Donation Received!</b>\n<b>User:</b> {message.from_user.mention}\n<b>Amount:</b> {p.total_amount} Stars")
     except Exception as e:
-        print("❌ PAYMENT ERROR:", e)
-        traceback.print_exc()
+        print(f"❌ SUCCESS HANDLER ERROR: {e}")
