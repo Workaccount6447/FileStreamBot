@@ -9,6 +9,8 @@ import traceback
 OWNER_ID = Telegram.OWNER_ID
 
 # --- 1. MANDATORY PRE-CHECKOUT HANDLER ---
+# This is a background check; the user doesn't see a message here, 
+# but it prevents the "Pay" button from failing.
 @FileStream.on_pre_checkout_query()
 async def pre_checkout_handler(_, query):
     await query.answer(ok=True)
@@ -41,25 +43,29 @@ Your support helps keep our tools fast, reliable, and free for everyone.
     ]
     
     try:
-        # We wrap this to catch the "MessageNotModified" error
         await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
     except MessageNotModified:
-        # Just answer the query so the loading spinner on the button goes away
         pass
     
     await query.answer()
 
-# --- 3. BILL GENERATOR ---
+# --- 3. BILL GENERATOR (With User Notification) ---
 @FileStream.on_callback_query(filters.regex(r"^bill_(\d+)$"))
 async def send_invoice_bill(_, query):
     try:
         amount = int(query.data.split("_")[1])
-        await query.answer(f"✅ Invoice for {amount} Stars generated!")
         
+        # This informs the user immediately with a popup alert
+        await query.answer(
+            f"✅ Generating your bill for {amount} Stars...\nPlease wait for the checkout window.", 
+            show_alert=True
+        )
+        
+        # Send the actual Stars Invoice
         await _.send_invoice(
             chat_id=query.from_user.id,
             title="Support Royality Bots",
-            description=f"Contribute {amount} Stars to support ongoing development!",
+            description=f"Finalize your contribution of {amount} Stars ❤️",
             payload=f"donate_{amount}",
             currency="XTR",
             prices=[LabeledPrice("Donation", amount)],
@@ -67,7 +73,7 @@ async def send_invoice_bill(_, query):
         )
     except Exception as e:
         print(f"❌ INVOICE ERROR: {e}")
-        await query.message.reply_text(f"❌ Error: {e}")
+        await query.message.reply_text(f"❌ Could not generate bill: {e}")
 
 # --- 4. SUCCESS HANDLER ---
 @FileStream.on_message(filters.successful_payment)
