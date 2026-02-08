@@ -1,7 +1,6 @@
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from FileStream.config import Telegram
 
-
 class LANG(object):
 
     START_TEXT = """
@@ -35,7 +34,7 @@ class LANG(object):
 • Helps me to maintain server\n\n
 Your small amount can motivate me a lot.\n\n
 Thanks\n\n
-<i>Click ⭐ Donate to proceed</i>
+<i>Click ⭐ Donate to proceed with Telegram Stars</i>
 """
 
     STREAM_TEXT = """
@@ -49,7 +48,7 @@ Oᴘᴇɴ ᴛʜɪs ʟɪɴᴋ ᴏɴ Bʀᴏᴡsᴇʀ 🌐 ᴛᴏ ᴀᴠᴏɪᴅ ɪ
 """
 
     STREAM_TEXT_X = """
-<i><u>𝗬𝗼𝘂𝗿 𝗟𝗶𝗻𝗸 𝗚𝗲𝗻𝗲𝗿𝗮𝘁𝗲𝗱 !</u></i>\n
+<i><u>𝗬𝗼𝘂𝗿 𝗟𝗶𝗻𝗸 𝗚ᴇ𝗻𝗲ʀ𝗮𝘁𝗲𝗱 !</u></i>\n
 <b>📂 Fɪʟᴇ ɴᴀᴍᴇ :</b> <b>{}</b>\n
 <b>📦 Fɪʟᴇ ꜱɪᴢᴇ :</b> <code>{}</code>\n
 <b>📥 Dᴏᴡɴʟᴏᴀᴅ :</b> <code>{}</code>\n
@@ -66,6 +65,10 @@ class BUTTON(object):
             InlineKeyboardButton('ʜᴇʟᴘ', callback_data='help'),
             InlineKeyboardButton('ᴀʙᴏᴜᴛ', callback_data='about'),
             InlineKeyboardButton('ᴄʟᴏsᴇ', callback_data='close')
+        ],
+        [
+            # This triggers the callback in your donate.py
+            InlineKeyboardButton('ᴅᴏɴᴀᴛᴇ ⭐', callback_data='donate')
         ],
         [
             InlineKeyboardButton(
@@ -100,5 +103,13 @@ class BUTTON(object):
                 "📢 ᴜᴘᴅᴀᴛᴇ ᴄʜᴀɴɴᴇʟ",
                 url=f'https://t.me/RoyalityBots'
             )
+        ]]
+    ) 
+
+    # Adding a specific button for the donation success/info page
+    DONATE_BUTTONS = InlineKeyboardMarkup(
+        [[
+            InlineKeyboardButton('ʙᴀᴄᴋ', callback_data='home'),
+            InlineKeyboardButton('ᴄʟᴏsᴇ', callback_data='close'),
         ]]
     )
