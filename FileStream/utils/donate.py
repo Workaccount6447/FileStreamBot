@@ -23,7 +23,7 @@ async def donate_menu(_, query):
 
 • It helps to cover the cost of the servers.\n
 • It motivate us to make an update or create a new bot.\n
-• Help me to buy a cup of tea from starbucks (does starbucks provides tea ?)<\b>\n-----------------------------------\n👇 <b>Choose an amount to donate:</b>"""
+• Help me to buy a cup of tea from starbucks (does starbucks provides tea ?)</b>\n-----------------------------------\n👇 <b>Choose an amount to donate:</b>"""
     
     buttons = [
         [
