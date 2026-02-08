@@ -10,7 +10,7 @@ from pyrogram import idle
 from FileStream.bot import FileStream
 from FileStream.server import web_server
 from FileStream.bot.clients import initialize_clients
-from FileStream.bot.utils import donate
+from FileStream.utils import donate
 
 
 logging.basicConfig(
