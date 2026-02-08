@@ -19,7 +19,12 @@ async def donate_menu(_, query):
     data = query.data.split("_")
     current_amount = int(data[1]) if len(data) > 1 else 10
     
-    text = f"<b>Why should you donate to Royality Bots?</b>\n-----------------------------------\n👇 <b>Choose an amount to donate:</b>"
+    text = f"<b>Why should you donate to Royality Bots?\n\n
+
+• It helps to cover the cost of the servers.\n
+• It motivate us to make an update or create a new bot.\n
+• Help me to buy a cup of tea from starbucks (does starbucks provides tea ?)
+</b>\n-----------------------------------\n👇 <b>Choose an amount to donate:</b>"
     
     buttons = [
         [
@@ -64,7 +69,7 @@ async def send_invoice_bill(_, query):
         # Send Invoice (provider_token removed to fix error)
         await _.send_invoice(
             chat_id=user.id,
-            title="Support Royality Bots",
+            title="Donate and made a difference. ",
             description=f"Contribute {amount} Stars ❤️",
             payload=f"donate_{amount}",
             currency="XTR",
