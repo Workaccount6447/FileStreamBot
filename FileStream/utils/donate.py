@@ -19,7 +19,7 @@ async def donate_menu(_, query):
     data = query.data.split("_")
     current_amount = int(data[1]) if len(data) > 1 else 10
     
-    text = f"<b>Why should you donate to Royality Bots?\n\n
+    text = "<b>Why should you donate to Royality Bots?\n\n
 
 • It helps to cover the cost of the servers.\n
 • It motivate us to make an update or create a new bot.\n
