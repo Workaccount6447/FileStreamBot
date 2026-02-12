@@ -1,216 +1,208 @@
-from pyrogram.errors import UserNotParticipant, FloodWait
-from pyrogram.enums.parse_mode import ParseMode
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
-from FileStream.utils.translation import LANG
-from FileStream.utils.database import Database
-from FileStream.utils.human_readable import humanbytes
-from FileStream.config import Telegram, Server
-from FileStream.bot import FileStream
 import asyncio
-from typing import (
-    Union
-)
+import logging
+from typing import Dict, Union
+from FileStream.bot import work_loads
+from pyrogram import Client, utils, raw
+from .file_properties import get_file_ids
+from pyrogram.session import Session, Auth
+from pyrogram.errors import AuthBytesInvalid
+from pyrogram.file_id import FileId, FileType, ThumbnailSource
+from pyrogram.types import Message
 
 
-db = Database(Telegram.DATABASE_URL, Telegram.SESSION_NAME)
+class ByteStreamer:
+    def __init__(self, client: Client):
+        self.client = client
+        self.clean_timer = 30 * 60
+        self.cached_file_ids: Dict[str, FileId] = {}
+        asyncio.create_task(self.clean_cache())
 
-async def get_invite_link(bot, chat_id: Union[str, int]):
-    try:
-        invite_link = await bot.create_chat_invite_link(chat_id=chat_id)
-        return invite_link
-    except FloodWait as e:
-        print(f"Sleep of {e.value}s caused by FloodWait ...")
-        await asyncio.sleep(e.value)
-        return await get_invite_link(bot, chat_id)
+    async def get_file_properties(self, db_id: str, multi_clients) -> FileId:
+        if db_id not in self.cached_file_ids:
+            await self.generate_file_properties(db_id, multi_clients)
+        return self.cached_file_ids[db_id]
 
-async def is_user_joined(bot, message: Message):
-    if Telegram.FORCE_SUB_ID and Telegram.FORCE_SUB_ID.startswith("-100"):
-        channel_chat_id = int(Telegram.FORCE_SUB_ID)    # When id startswith with -100
-    elif Telegram.FORCE_SUB_ID and (not Telegram.FORCE_SUB_ID.startswith("-100")):
-        channel_chat_id = Telegram.FORCE_SUB_ID     # When id not startswith -100
-    else:
-        return 200
-    try:
-        user = await bot.get_chat_member(chat_id=channel_chat_id, user_id=message.from_user.id)
-        if user.status == "BANNED":
-            await message.reply_text(
-                text=LANG.BAN_TEXT.format(Telegram.OWNER_ID),
-                parse_mode=ParseMode.MARKDOWN,
-                disable_web_page_preview=True
-            )
-            return False
-    except UserNotParticipant:
-        invite_link = await get_invite_link(bot, chat_id=channel_chat_id)
-        if Telegram.VERIFY_PIC:
-            ver = await message.reply_photo(
-                photo=Telegram.VERIFY_PIC,
-                caption="<i>Jᴏɪɴ ᴍʏ ᴜᴘᴅᴀᴛᴇ ᴄʜᴀɴɴᴇʟ ᴛᴏ ᴜsᴇ ᴍᴇ 🔐</i>",
-                parse_mode=ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup(
-                [[
-                    InlineKeyboardButton("❆ Jᴏɪɴ Oᴜʀ Cʜᴀɴɴᴇʟ ❆", url=invite_link.invite_link)
-                ]]
+    async def generate_file_properties(self, db_id: str, multi_clients) -> FileId:
+        file_id = await get_file_ids(self.client, db_id, multi_clients, Message)
+        self.cached_file_ids[db_id] = file_id
+        return file_id
+
+    async def generate_media_session(self, client: Client, file_id: FileId) -> Session:
+        media_session = client.media_sessions.get(file_id.dc_id)
+
+        if not media_session:
+            if file_id.dc_id != await client.storage.dc_id():
+                media_session = Session(
+                    client,
+                    file_id.dc_id,
+                    await Auth(client, file_id.dc_id, await client.storage.test_mode()).create(),
+                    await client.storage.test_mode(),
+                    is_media=True,
                 )
+                await media_session.start()
+
+                # FAST CONNECTION MODE
+                media_session.connection.retries = 1
+                media_session.connection.timeout = 10
+
+                for _ in range(6):
+                    exported_auth = await client.invoke(
+                        raw.functions.auth.ExportAuthorization(dc_id=file_id.dc_id)
+                    )
+                    try:
+                        await media_session.invoke(
+                            raw.functions.auth.ImportAuthorization(
+                                id=exported_auth.id,
+                                bytes=exported_auth.bytes
+                            )
+                        )
+                        break
+                    except AuthBytesInvalid:
+                        await asyncio.sleep(1)
+                        continue
+                else:
+                    await media_session.stop()
+                    raise AuthBytesInvalid
+            else:
+                media_session = Session(
+                    client,
+                    file_id.dc_id,
+                    await client.storage.auth_key(),
+                    await client.storage.test_mode(),
+                    is_media=True,
+                )
+                await media_session.start()
+
+                media_session.connection.retries = 1
+                media_session.connection.timeout = 10
+
+            client.media_sessions[file_id.dc_id] = media_session
+
+        return media_session
+
+    @staticmethod
+    async def get_location(file_id: FileId) -> Union[
+        raw.types.InputPhotoFileLocation,
+        raw.types.InputDocumentFileLocation,
+        raw.types.InputPeerPhotoFileLocation,
+    ]:
+
+        if file_id.file_type == FileType.CHAT_PHOTO:
+            if file_id.chat_id > 0:
+                peer = raw.types.InputPeerUser(
+                    user_id=file_id.chat_id,
+                    access_hash=file_id.chat_access_hash
+                )
+            else:
+                if file_id.chat_access_hash == 0:
+                    peer = raw.types.InputPeerChat(chat_id=-file_id.chat_id)
+                else:
+                    peer = raw.types.InputPeerChannel(
+                        channel_id=utils.get_channel_id(file_id.chat_id),
+                        access_hash=file_id.chat_access_hash,
+                    )
+
+            return raw.types.InputPeerPhotoFileLocation(
+                peer=peer,
+                volume_id=file_id.volume_id,
+                local_id=file_id.local_id,
+                big=file_id.thumbnail_source == ThumbnailSource.CHAT_PHOTO_BIG,
             )
+
+        elif file_id.file_type == FileType.PHOTO:
+            return raw.types.InputPhotoFileLocation(
+                id=file_id.media_id,
+                access_hash=file_id.access_hash,
+                file_reference=file_id.file_reference,
+                thumb_size=file_id.thumbnail_size,
+            )
+
         else:
-            ver = await message.reply_text(
-                text = "<i>Jᴏɪɴ ᴍʏ ᴜᴘᴅᴀᴛᴇ ᴄʜᴀɴɴᴇʟ ᴛᴏ ᴜsᴇ ᴍᴇ 🔐</i>",
-                reply_markup=InlineKeyboardMarkup(
-                    [[
-                        InlineKeyboardButton("❆ Jᴏɪɴ Oᴜʀ Cʜᴀɴɴᴇʟ ❆", url=invite_link.invite_link)
-                    ]]
-                ),
-                parse_mode=ParseMode.HTML
+            return raw.types.InputDocumentFileLocation(
+                id=file_id.media_id,
+                access_hash=file_id.access_hash,
+                file_reference=file_id.file_reference,
+                thumb_size=file_id.thumbnail_size,
             )
-        await asyncio.sleep(30)
+
+    async def yield_file(
+        self,
+        file_id: FileId,
+        index: int,
+        offset: int,
+        first_part_cut: int,
+        last_part_cut: int,
+        part_count: int,
+        chunk_size: int,
+    ):
+
+        client = self.client
+        work_loads[index] += 1
+
+        media_session = await self.generate_media_session(client, file_id)
+        location = await self.get_location(file_id)
+
+        max_retries = 4
+        retry_delay = 1
+
         try:
-            await ver.delete()
-            await message.delete()
-        except Exception:
-            pass
-        return False
-    except Exception:
-        await message.reply_text(
-            text = f"<i>Sᴏᴍᴇᴛʜɪɴɢ ᴡʀᴏɴɢ ᴄᴏɴᴛᴀᴄᴛ ᴍʏ ᴅᴇᴠᴇʟᴏᴘᴇʀ</i> <b><a href='https://t.me/{Telegram.UPDATES_CHANNEL}'>[ ᴄʟɪᴄᴋ ʜᴇʀᴇ ]</a></b>",
-            parse_mode=ParseMode.HTML,
-            disable_web_page_preview=True)
-        return False
-    return True
+            # MAX SAFE PARALLELISM
+            workers = min(16, part_count)
+            semaphore = asyncio.Semaphore(workers)
 
-#---------------------[ PRIVATE GEN LINK + CALLBACK ]---------------------#
+            async def fetch(part_index):
+                part_offset = offset + (part_index * chunk_size)
 
-async def gen_link(_id):
-    file_info = await db.get_file(_id)
-    file_name = file_info['file_name']
-    file_size = humanbytes(file_info['file_size'])
-    mime_type = file_info['mime_type']
+                async with semaphore:
+                    retries = 0
+                    while retries < max_retries:
+                        try:
+                            r = await media_session.invoke(
+                                raw.functions.upload.GetFile(
+                                    location=location,
+                                    offset=part_offset,
+                                    limit=chunk_size
+                                )
+                            )
 
-    page_link = f"{Server.URL}watch/{_id}"
-    stream_link = f"{Server.URL}dl/{_id}"
-    file_link = f"https://t.me/{FileStream.username}?start=file_{_id}"
+                            if isinstance(r, raw.types.upload.File):
+                                return part_index, r.bytes
+                            return part_index, b""
 
-    if "video" in mime_type:
-        stream_text = LANG.STREAM_TEXT.format(file_name, file_size, stream_link, page_link, file_link)
-        reply_markup = InlineKeyboardMarkup(
-            [
-                [InlineKeyboardButton("sᴛʀᴇᴀᴍ", url=page_link), InlineKeyboardButton("ᴅᴏᴡɴʟᴏᴀᴅ", url=stream_link)],
-                [InlineKeyboardButton("ɢᴇᴛ ғɪʟᴇ", url=file_link), InlineKeyboardButton("ʀᴇᴠᴏᴋᴇ ғɪʟᴇ", callback_data=f"msgdelpvt_{_id}")],
-                [InlineKeyboardButton("ᴄʟᴏsᴇ", callback_data="close")]
-            ]
-        )
-    else:
-        stream_text = LANG.STREAM_TEXT_X.format(file_name, file_size, stream_link, file_link)
-        reply_markup = InlineKeyboardMarkup(
-            [
-                [InlineKeyboardButton("ᴅᴏᴡɴʟᴏᴀᴅ", url=stream_link)],
-                [InlineKeyboardButton("ɢᴇᴛ ғɪʟᴇ", url=file_link), InlineKeyboardButton("ʀᴇᴠᴏᴋᴇ ғɪʟᴇ", callback_data=f"msgdelpvt_{_id}")],
-                [InlineKeyboardButton("ᴄʟᴏsᴇ", callback_data="close")]
-            ]
-        )
-    return reply_markup, stream_text
+                        except OSError:
+                            retries += 1
+                            await asyncio.sleep(retry_delay)
 
-#---------------------[ GEN STREAM LINKS FOR CHANNEL ]---------------------#
+                    return part_index, b""
 
-async def gen_linkx(m:Message , _id, name: list):
-    file_info = await db.get_file(_id)
-    file_name = file_info['file_name']
-    mime_type = file_info['mime_type']
-    file_size = humanbytes(file_info['file_size'])
+            # START ALL TASKS INSTANTLY
+            tasks = [asyncio.create_task(fetch(i)) for i in range(part_count)]
 
-    page_link = f"{Server.URL}watch/{_id}"
-    stream_link = f"{Server.URL}dl/{_id}"
-    file_link = f"https://t.me/{FileStream.username}?start=file_{_id}"
+            # STREAM AS THEY ARRIVE (NO WAITING)
+            results = [await t for t in asyncio.as_completed(tasks)]
+            results.sort(key=lambda x: x[0])
 
-    if "video" in mime_type:
-        stream_text= LANG.STREAM_TEXT_X.format(file_name, file_size, stream_link, page_link)
-        reply_markup = InlineKeyboardMarkup(
-            [
-                [InlineKeyboardButton("sᴛʀᴇᴀᴍ", url=page_link), InlineKeyboardButton("ᴅᴏᴡɴʟᴏᴀᴅ", url=stream_link)]
-            ]
-        )
-    else:
-        stream_text= LANG.STREAM_TEXT_X.format(file_name, file_size, stream_link, file_link)
-        reply_markup = InlineKeyboardMarkup(
-            [
-                [InlineKeyboardButton("ᴅᴏᴡɴʟᴏᴀᴅ", url=stream_link)]
-            ]
-        )
-    return reply_markup, stream_text
+            for part_index, chunk in results:
 
-#---------------------[ USER BANNED ]---------------------#
+                if not chunk:
+                    continue
 
-async def is_user_banned(message):
-    if await db.is_user_banned(message.from_user.id):
-        await message.reply_text(
-            text=LANG.BAN_TEXT.format(Telegram.OWNER_ID),
-            parse_mode=ParseMode.MARKDOWN,
-            disable_web_page_preview=True
-        )
-        return True
-    return False
+                if part_count == 1:
+                    yield chunk[first_part_cut:last_part_cut]
 
-#---------------------[ CHANNEL BANNED ]---------------------#
+                elif part_index == 0:
+                    yield chunk[first_part_cut:]
 
-async def is_channel_banned(bot, message):
-    if await db.is_user_banned(message.chat.id):
-        await bot.edit_message_reply_markup(
-            chat_id=message.chat.id,
-            message_id=message.id,
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton(f"ᴄʜᴀɴɴᴇʟ ɪs ʙᴀɴɴᴇᴅ", callback_data="N/A")]])
-        )
-        return True
-    return False
+                elif part_index == part_count - 1:
+                    yield chunk[:last_part_cut]
 
-#---------------------[ USER AUTH ]---------------------#
+                else:
+                    yield chunk
 
-async def is_user_authorized(message):
-    if hasattr(Telegram, 'AUTH_USERS') and Telegram.AUTH_USERS:
-        user_id = message.from_user.id
+        finally:
+            work_loads[index] -= 1
 
-        if user_id == Telegram.OWNER_ID:
-            return True
-
-        if not (user_id in Telegram.AUTH_USERS):
-            await message.reply_text(
-                text="Yᴏᴜ ᴀʀᴇ ɴᴏᴛ ᴀᴜᴛʜᴏʀɪᴢᴇᴅ ᴛᴏ ᴜsᴇ ᴛʜɪs ʙᴏᴛ.",
-                parse_mode=ParseMode.MARKDOWN,
-                disable_web_page_preview=True
-            )
-            return False
-
-    return True
-
-#---------------------[ USER EXIST ]---------------------#
-
-async def is_user_exist(bot, message):
-    if not bool(await db.get_user(message.from_user.id)):
-        await db.add_user(message.from_user.id)
-        await bot.send_message(
-            Telegram.ULOG_CHANNEL,
-            f"**#NᴇᴡUsᴇʀ**\n**⬩ ᴜsᴇʀ ɴᴀᴍᴇ :** [{message.from_user.first_name}](tg://user?id={message.from_user.id})\n**⬩ ᴜsᴇʀ ɪᴅ :** `{message.from_user.id}`"
-        )
-
-async def is_channel_exist(bot, message):
-    if not bool(await db.get_user(message.chat.id)):
-        await db.add_user(message.chat.id)
-        members = await bot.get_chat_members_count(message.chat.id)
-        await bot.send_message(
-            Telegram.ULOG_CHANNEL,
-            f"**#NᴇᴡCʜᴀɴɴᴇʟ** \n**⬩ ᴄʜᴀᴛ ɴᴀᴍᴇ :** `{message.chat.title}`\n**⬩ ᴄʜᴀᴛ ɪᴅ :** `{message.chat.id}`\n**⬩ ᴛᴏᴛᴀʟ ᴍᴇᴍʙᴇʀs :** `{members}`"
-        )
-
-async def verify_user(bot, message):
-    if not await is_user_authorized(message):
-        return False
-
-    if await is_user_banned(message):
-        return False
-
-    await is_user_exist(bot, message)
-
-    if Telegram.FORCE_SUB:
-        if not await is_user_joined(bot, message):
-            return False
-
-    return True
+    async def clean_cache(self):
+        while True:
+            await asyncio.sleep(self.clean_timer)
+            self.cached_file_ids.clear()
