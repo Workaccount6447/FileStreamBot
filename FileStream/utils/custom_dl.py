@@ -20,11 +20,9 @@ class ByteStreamer:
         self.clean_timer = 30 * 60
         self.cached_file_ids: Dict[str, FileId] = {}
 
-        # max parallel downloads per user
         self.global_semaphore = asyncio.Semaphore(4)
-
-        # turbo workers per file
         self.parallel_workers = 3
+        self.max_buffer = 6  # prevents RAM overflow
 
         asyncio.create_task(self.clean_cache())
 
@@ -195,11 +193,13 @@ class ByteStreamer:
 
             try:
                 next_part = 0
+                current = 0
                 buffer = {}
                 lock = asyncio.Lock()
+                buffer_sem = asyncio.Semaphore(self.max_buffer)
 
-                async def worker(worker_id):
-                    nonlocal next_part, offset
+                async def worker():
+                    nonlocal next_part
 
                     while True:
                         async with lock:
@@ -208,6 +208,8 @@ class ByteStreamer:
 
                         if part >= part_count:
                             return
+
+                        await buffer_sem.acquire()
 
                         part_offset = offset + part * chunk_size
                         data = await self.fetch_chunk(
@@ -221,19 +223,19 @@ class ByteStreamer:
                         buffer[part] = data
 
                 workers = [
-                    asyncio.create_task(worker(i))
-                    for i in range(self.parallel_workers)
+                    asyncio.create_task(worker())
+                    for _ in range(self.parallel_workers)
                 ]
-
-                current = 0
 
                 while current < part_count:
 
                     if current not in buffer:
-                        await asyncio.sleep(0.001)
+                        await asyncio.sleep(0.0005)
                         continue
 
                     chunk = buffer.pop(current)
+                    buffer_sem.release()
+
                     if chunk is None:
                         return
 
