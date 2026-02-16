@@ -21,8 +21,8 @@ class ByteStreamer:
         self.cached_file_ids: Dict[str, FileId] = {}
 
         self.global_semaphore = asyncio.Semaphore(4)
-        self.parallel_workers = 3
-        self.max_buffer = 6  # prevents RAM overflow
+        self.parallel_workers = 2
+        self.max_buffer = 6
 
         asyncio.create_task(self.clean_cache())
 
@@ -186,10 +186,9 @@ class ByteStreamer:
         db_id=None,
         multi_clients=None
     ):
-
         async with self.global_semaphore:
-
             work_loads[index] += 1
+            workers = []
 
             try:
                 next_part = 0
@@ -200,27 +199,29 @@ class ByteStreamer:
 
                 async def worker():
                     nonlocal next_part
+                    try:
+                        while True:
+                            async with lock:
+                                part = next_part
+                                next_part += 1
 
-                    while True:
-                        async with lock:
-                            part = next_part
-                            next_part += 1
+                            if part >= part_count:
+                                return
 
-                        if part >= part_count:
-                            return
+                            await buffer_sem.acquire()
 
-                        await buffer_sem.acquire()
+                            part_offset = offset + part * chunk_size
+                            data = await self.fetch_chunk(
+                                file_id,
+                                part_offset,
+                                chunk_size,
+                                db_id,
+                                multi_clients
+                            )
 
-                        part_offset = offset + part * chunk_size
-                        data = await self.fetch_chunk(
-                            file_id,
-                            part_offset,
-                            chunk_size,
-                            db_id,
-                            multi_clients
-                        )
-
-                        buffer[part] = data
+                            buffer[part] = data
+                    except asyncio.CancelledError:
+                        return
 
                 workers = [
                     asyncio.create_task(worker())
@@ -228,9 +229,8 @@ class ByteStreamer:
                 ]
 
                 while current < part_count:
-
                     if current not in buffer:
-                        await asyncio.sleep(0.0005)
+                        await asyncio.sleep(0)
                         continue
 
                     chunk = buffer.pop(current)
@@ -250,9 +250,10 @@ class ByteStreamer:
 
                     current += 1
 
-                await asyncio.gather(*workers)
-
             finally:
+                for w in workers:
+                    w.cancel()
+                await asyncio.gather(*workers, return_exceptions=True)
                 work_loads[index] -= 1
 
     async def clean_cache(self):
