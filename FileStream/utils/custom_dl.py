@@ -1,83 +1,115 @@
 import asyncio
 import logging
-import socket
-from typing import Dict, Union
+from typing import Dict
 
-from FileStream.bot import work_loads
-from pyrogram import Client, utils, raw
-from .file_properties import get_file_ids
-from pyrogram.session import Session, Auth
+from pyrogram import Client, raw, utils
 from pyrogram.errors import AuthBytesInvalid
 from pyrogram.file_id import FileId, FileType, ThumbnailSource
+from pyrogram.session import Session
+from pyrogram.session.auth import Auth
 from pyrogram.types import Message
-
-socket.setdefaulttimeout(30)
 
 
 class ByteStreamer:
     def __init__(self, client: Client):
-        self.client: Client = client
-        self.clean_timer = 30 * 60
+        self.client = client
+
+        # cache
         self.cached_file_ids: Dict[str, FileId] = {}
 
-        self.global_semaphore = asyncio.Semaphore(4)
-        self.parallel_workers = 2
-        self.max_buffer = 6
+        # limits (SAFE VALUES)
+        self.clean_timer = 30 * 60
+        self.global_semaphore = asyncio.Semaphore(2)
+        self.parallel_workers = 1
+        self.max_buffer = 3
+
+        # locks
+        self.invoke_lock = asyncio.Lock()
+        self.dc_locks = {}
 
         asyncio.create_task(self.clean_cache())
 
-    async def get_file_properties(self, db_id: str, multi_clients) -> FileId:
+    # --------------------------------------------------
+
+    async def clean_cache(self):
+        while True:
+            await asyncio.sleep(self.clean_timer)
+            self.cached_file_ids.clear()
+            logging.debug("File cache cleared")
+
+    # --------------------------------------------------
+
+    async def get_file_properties(self, db_id, multi_clients):
         if db_id not in self.cached_file_ids:
             file_id = await get_file_ids(self.client, db_id, multi_clients, Message)
             self.cached_file_ids[db_id] = file_id
         return self.cached_file_ids[db_id]
 
-    async def generate_media_session(self, client: Client, file_id: FileId) -> Session:
-        media_session = client.media_sessions.get(file_id.dc_id)
+    # --------------------------------------------------
 
-        if media_session:
-            return media_session
+    async def generate_media_session(self, client: Client, file_id: FileId):
 
-        if file_id.dc_id != await client.storage.dc_id():
-            media_session = Session(
-                client,
-                file_id.dc_id,
-                await Auth(client, file_id.dc_id, await client.storage.test_mode()).create(),
-                await client.storage.test_mode(),
-                is_media=True,
-            )
-            await media_session.start()
+        lock = self.dc_locks.setdefault(file_id.dc_id, asyncio.Lock())
 
-            for _ in range(6):
-                exported_auth = await client.invoke(
-                    raw.functions.auth.ExportAuthorization(dc_id=file_id.dc_id)
+        async with lock:
+
+            media_session = client.media_sessions.get(file_id.dc_id)
+            if media_session:
+                return media_session
+
+            if file_id.dc_id != await client.storage.dc_id():
+
+                media_session = Session(
+                    client,
+                    file_id.dc_id,
+                    await Auth(
+                        client,
+                        file_id.dc_id,
+                        await client.storage.test_mode()
+                    ).create(),
+                    await client.storage.test_mode(),
+                    is_media=True,
                 )
-                try:
-                    await media_session.invoke(
-                        raw.functions.auth.ImportAuthorization(
-                            id=exported_auth.id,
-                            bytes=exported_auth.bytes
+
+                await media_session.start()
+
+                for _ in range(6):
+                    exported_auth = await client.invoke(
+                        raw.functions.auth.ExportAuthorization(
+                            dc_id=file_id.dc_id
                         )
                     )
-                    break
-                except AuthBytesInvalid:
-                    await asyncio.sleep(1)
+
+                    try:
+                        await media_session.invoke(
+                            raw.functions.auth.ImportAuthorization(
+                                id=exported_auth.id,
+                                bytes=exported_auth.bytes
+                            )
+                        )
+                        break
+
+                    except AuthBytesInvalid:
+                        await asyncio.sleep(1)
+
+                else:
+                    await media_session.stop()
+                    raise AuthBytesInvalid
+
             else:
-                await media_session.stop()
-                raise AuthBytesInvalid
+                media_session = Session(
+                    client,
+                    file_id.dc_id,
+                    await client.storage.auth_key(),
+                    await client.storage.test_mode(),
+                    is_media=True,
+                )
+                await media_session.start()
 
-        else:
-            media_session = Session(
-                client,
-                file_id.dc_id,
-                await client.storage.auth_key(),
-                await client.storage.test_mode(),
-                is_media=True,
-            )
-            await media_session.start()
+            client.media_sessions[file_id.dc_id] = media_session
+            return media_session
 
-        client.media_sessions[file_id.dc_id] = media_session
-        return media_session
+    # --------------------------------------------------
 
     async def close_dc(self, dc_id: int):
         session = self.client.media_sessions.pop(dc_id, None)
@@ -87,11 +119,13 @@ class ByteStreamer:
             except:
                 pass
 
+    # --------------------------------------------------
+
     @staticmethod
     async def get_location(file_id: FileId):
-        file_type = file_id.file_type
 
-        if file_type == FileType.CHAT_PHOTO:
+        if file_id.file_type == FileType.CHAT_PHOTO:
+
             if file_id.chat_id > 0:
                 peer = raw.types.InputPeerUser(
                     user_id=file_id.chat_id,
@@ -99,7 +133,9 @@ class ByteStreamer:
                 )
             else:
                 if file_id.chat_access_hash == 0:
-                    peer = raw.types.InputPeerChat(chat_id=-file_id.chat_id)
+                    peer = raw.types.InputPeerChat(
+                        chat_id=-file_id.chat_id
+                    )
                 else:
                     peer = raw.types.InputPeerChannel(
                         channel_id=utils.get_channel_id(file_id.chat_id),
@@ -110,10 +146,12 @@ class ByteStreamer:
                 peer=peer,
                 volume_id=file_id.volume_id,
                 local_id=file_id.local_id,
-                big=file_id.thumbnail_source == ThumbnailSource.CHAT_PHOTO_BIG,
+                big=file_id.thumbnail_source ==
+                ThumbnailSource.CHAT_PHOTO_BIG,
             )
 
-        elif file_type == FileType.PHOTO:
+        elif file_id.file_type == FileType.PHOTO:
+
             return raw.types.InputPhotoFileLocation(
                 id=file_id.media_id,
                 access_hash=file_id.access_hash,
@@ -129,26 +167,39 @@ class ByteStreamer:
                 thumb_size=file_id.thumbnail_size,
             )
 
-    async def fetch_chunk(self, file_id, offset, chunk_size, db_id, multi_clients):
+    # --------------------------------------------------
+
+    async def fetch_chunk(
+        self,
+        file_id,
+        offset,
+        chunk_size,
+        db_id,
+        multi_clients
+    ):
+
         retries = 0
-        MAX_RETRIES = 6
-        BASE_DELAY = 2
 
         while True:
             try:
-                session = await self.generate_media_session(self.client, file_id)
+                session = await self.generate_media_session(
+                    self.client,
+                    file_id
+                )
+
                 location = await self.get_location(file_id)
 
-                r = await asyncio.wait_for(
-                    session.invoke(
-                        raw.functions.upload.GetFile(
-                            location=location,
-                            offset=offset,
-                            limit=chunk_size
-                        )
-                    ),
-                    timeout=30
-                )
+                async with self.invoke_lock:
+                    r = await asyncio.wait_for(
+                        session.invoke(
+                            raw.functions.upload.GetFile(
+                                location=location,
+                                offset=offset,
+                                limit=chunk_size
+                            )
+                        ),
+                        timeout=30
+                    )
 
                 if not isinstance(r, raw.types.upload.File):
                     return None
@@ -156,23 +207,29 @@ class ByteStreamer:
                 return r.bytes
 
             except Exception as e:
+
                 retries += 1
-                if retries >= MAX_RETRIES:
+                if retries >= 6:
                     logging.error(f"Chunk failed permanently: {e}")
                     return None
 
-                wait = BASE_DELAY * (2 ** retries)
+                wait = 2 ** retries
                 logging.warning(f"Chunk retry {retries}: {e}")
 
                 await self.close_dc(file_id.dc_id)
 
                 if db_id and multi_clients:
                     try:
-                        file_id = await self.get_file_properties(db_id, multi_clients)
+                        file_id = await self.get_file_properties(
+                            db_id,
+                            multi_clients
+                        )
                     except:
                         pass
 
                 await asyncio.sleep(wait)
+
+    # --------------------------------------------------
 
     async def yield_file(
         self,
@@ -186,42 +243,45 @@ class ByteStreamer:
         db_id=None,
         multi_clients=None
     ):
+
         async with self.global_semaphore:
-            work_loads[index] += 1
+
             workers = []
 
             try:
+
                 next_part = 0
                 current = 0
                 buffer = {}
+
                 lock = asyncio.Lock()
                 buffer_sem = asyncio.Semaphore(self.max_buffer)
 
                 async def worker():
                     nonlocal next_part
-                    try:
-                        while True:
-                            async with lock:
-                                part = next_part
-                                next_part += 1
 
-                            if part >= part_count:
-                                return
+                    while True:
 
-                            await buffer_sem.acquire()
+                        async with lock:
+                            part = next_part
+                            next_part += 1
 
-                            part_offset = offset + part * chunk_size
-                            data = await self.fetch_chunk(
-                                file_id,
-                                part_offset,
-                                chunk_size,
-                                db_id,
-                                multi_clients
-                            )
+                        if part >= part_count:
+                            return
 
-                            buffer[part] = data
-                    except asyncio.CancelledError:
-                        return
+                        await buffer_sem.acquire()
+
+                        part_offset = offset + part * chunk_size
+
+                        data = await self.fetch_chunk(
+                            file_id,
+                            part_offset,
+                            chunk_size,
+                            db_id,
+                            multi_clients
+                        )
+
+                        buffer[part] = data
 
                 workers = [
                     asyncio.create_task(worker())
@@ -229,8 +289,9 @@ class ByteStreamer:
                 ]
 
                 while current < part_count:
+
                     if current not in buffer:
-                        await asyncio.sleep(0)
+                        await asyncio.sleep(0.001)
                         continue
 
                     chunk = buffer.pop(current)
@@ -241,10 +302,13 @@ class ByteStreamer:
 
                     if part_count == 1:
                         yield chunk[first_part_cut:last_part_cut]
+
                     elif current == 0:
                         yield chunk[first_part_cut:]
+
                     elif current == part_count - 1:
                         yield chunk[:last_part_cut]
+
                     else:
                         yield chunk
 
@@ -253,11 +317,5 @@ class ByteStreamer:
             finally:
                 for w in workers:
                     w.cancel()
-                await asyncio.gather(*workers, return_exceptions=True)
-                work_loads[index] -= 1
 
-    async def clean_cache(self):
-        while True:
-            await asyncio.sleep(self.clean_timer)
-            self.cached_file_ids.clear()
-            logging.debug("File cache cleared")
+                await asyncio.gather(*workers, return_exceptions=True)
