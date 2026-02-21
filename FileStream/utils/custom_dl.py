@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from typing import Dict
+from .file_properties import get_file_ids
 
 from pyrogram import Client, raw, utils
 from pyrogram.errors import AuthBytesInvalid
