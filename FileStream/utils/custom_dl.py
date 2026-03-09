@@ -18,11 +18,11 @@ class ByteStreamer:
         # cache
         self.cached_file_ids: Dict[str, FileId] = {}
 
-        # limits (SAFE VALUES)
+        # limits — tuned for 512 KB chunks
         self.clean_timer = 30 * 60
-        self.global_semaphore = asyncio.Semaphore(2)
-        self.parallel_workers = 1
-        self.max_buffer = 3
+        self.global_semaphore = asyncio.Semaphore(4)   # allow more concurrent streams
+        self.parallel_workers = 3                       # prefetch 3 chunks at once
+        self.max_buffer = 6                             # buffer up to 6 chunks ahead
 
         # locks
         self.invoke_lock = asyncio.Lock()
