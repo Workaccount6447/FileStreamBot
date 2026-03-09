@@ -4,7 +4,7 @@ from FileStream.bot import FileStream, multi_clients
 from FileStream.utils.bot_utils import is_user_banned, is_user_exist, is_user_joined, gen_link, is_channel_banned, is_channel_exist, is_user_authorized
 from FileStream.utils.database import Database
 from FileStream.utils.file_properties import get_file_ids, get_file_info
-from FileStream.config import Telegram
+from FileStream.config import Telegram, Server
 from pyrogram import filters, Client
 from pyrogram.errors import FloodWait
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
@@ -74,13 +74,37 @@ async def channel_receive_handler(bot: Client, message: Message):
     try:
         inserted_id = await db.add_file(get_file_info(message))
         await get_file_ids(False, inserted_id, multi_clients, message)
-        reply_markup, stream_link = await gen_link(_id=inserted_id)
+
+        _finfo = get_file_info(message)
+        _mime = _finfo.get("mime_type", "")
+        _page_link = f"{Server.URL}watch/{inserted_id}"
+        _stream_link = f"{Server.URL}dl/{inserted_id}"
+        _file_link = f"https://t.me/{FileStream.username}?start=file_{inserted_id}"
+
+        if "video" in _mime or "audio" in _mime:
+            channel_markup = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("🎬 Sᴛʀᴇᴀᴍ Nᴏᴡ ↗", url=_page_link),
+                    InlineKeyboardButton("📥 Dᴏᴡɴʟᴏᴀᴅ ↗", url=_stream_link),
+                ],
+                [
+                    InlineKeyboardButton("🗂 Cʟɪᴄᴋ ʜᴇʀᴇ ᴛᴏ Gᴇᴛ Fɪʟᴇ ↗", url=_file_link),
+                ],
+            ])
+        else:
+            channel_markup = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("📥 Dᴏᴡɴʟᴏᴀᴅ ↗", url=_stream_link),
+                ],
+                [
+                    InlineKeyboardButton("🗂 Cʟɪᴄᴋ ʜᴇʀᴇ ᴛᴏ Gᴇᴛ Fɪʟᴇ ↗", url=_file_link),
+                ],
+            ])
+
         await bot.edit_message_reply_markup(
             chat_id=message.chat.id,
             message_id=message.id,
-            reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("Dᴏᴡɴʟᴏᴀᴅ ʟɪɴᴋ 📥",
-                                       url=f"https://t.me/{FileStream.username}?start=stream_{str(inserted_id)}")]])
+            reply_markup=channel_markup
         )
 
     except FloodWait as w:
