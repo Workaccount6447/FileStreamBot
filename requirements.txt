@@ -1,4 +1,3 @@
-aiohttp
 pyrofork
 python-dotenv
 tgcrypto
@@ -7,3 +6,4 @@ aiofiles
 dnspython
 requests
 jinja2
+uvloop
