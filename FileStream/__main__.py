@@ -3,7 +3,6 @@ import asyncio
 import logging
 import traceback
 import logging.handlers as handlers
-
 from FileStream.config import Telegram, Server
 from aiohttp import web
 from pyrogram import idle
@@ -11,93 +10,70 @@ from pyrogram import idle
 from FileStream.bot import FileStream
 from FileStream.server import web_server
 from FileStream.bot.clients import initialize_clients
-import FileStream.utils.donate  # loads donate handlers
+from FileStream.utils import donate
 
-# ── Logging ────────────────────────────────────────────────────────────────────
+
 logging.basicConfig(
     level=logging.INFO,
     datefmt="%d/%m/%Y %H:%M:%S",
-    format="[%(asctime)s] {%(filename)s:%(lineno)d} %(levelname)s - %(message)s",
-    handlers=[
-        logging.StreamHandler(stream=sys.stdout),
-        handlers.RotatingFileHandler(
-            "streambot.log", mode="a",
-            maxBytes=100 * 1024 * 1024,
-            backupCount=2, encoding="utf-8",
-        ),
-    ],
-)
+    format='[%(asctime)s] {%(pathname)s:%(lineno)d} %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(stream=sys.stdout),
+              handlers.RotatingFileHandler("streambot.log", mode="a", maxBytes=104857600, backupCount=2, encoding="utf-8")],)
 
-for _noisy in ("aiohttp", "aiohttp.web", "pyrogram", "pyrogram.session.session"):
-    logging.getLogger(_noisy).setLevel(logging.ERROR)
+logging.getLogger("aiohttp").setLevel(logging.ERROR)
+logging.getLogger("pyrogram").setLevel(logging.ERROR)
+logging.getLogger("aiohttp.web").setLevel(logging.ERROR)
 
-# ── uvloop (optional) ──────────────────────────────────────────────────────────
-try:
-    import uvloop
-    asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
-    logging.info("uvloop active")
-except ImportError:
-    logging.info("uvloop not found — using default asyncio")
+server = web.AppRunner(web_server())
 
-# ── Create event loop explicitly — works with both uvloop and default asyncio ──
-loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
-
-server = web.AppRunner(
-    web_server(),
-    access_log=None,
-    tcp_keepalive=True,
-    keepalive_timeout=75,
-)
-
+loop = asyncio.get_event_loop()
 
 async def start_services():
-    mode = "Secondary" if Telegram.SECONDARY else "Primary"
-    print(f"\n--- Starting as {mode} Server ---\n")
+    print()
+    if Telegram.SECONDARY:
+        print("------------------ Starting as Secondary Server ------------------")
+    else:
+        print("------------------- Starting as Primary Server -------------------")
+    print()
+    print("-------------------- Initializing Telegram Bot --------------------")
 
-    print("Initializing Telegram Bot...")
+
     await FileStream.start()
     bot_info = await FileStream.get_me()
-    FileStream.id       = bot_info.id
+    FileStream.id = bot_info.id
     FileStream.username = bot_info.username
-    FileStream.fname    = bot_info.first_name
-    print("  Bot ready")
-
-    print("Initializing clients...")
+    FileStream.fname=bot_info.first_name
+    print("------------------------------ DONE ------------------------------")
+    print()
+    print("---------------------- Initializing Clients ----------------------")
     await initialize_clients()
-    print("  Clients ready")
-
-    print("Starting web server...")
+    print("------------------------------ DONE ------------------------------")
+    print()
+    print("--------------------- Initializing Web Server ---------------------")
     await server.setup()
-    await web.TCPSite(
-        server,
-        Server.BIND_ADDRESS,
-        Server.PORT,
-        reuse_address=True,
-        # reuse_port removed — causes OSError on Koyeb if port not fully released
-    ).start()
-    print("  Web server ready")
-    print(f"\n  Bot : {bot_info.first_name}")
+    await web.TCPSite(server, Server.BIND_ADDRESS, Server.PORT).start()
+    print("------------------------------ DONE ------------------------------")
+    print()
+    print("------------------------- Service Started -------------------------")
+    print("                        bot =>> {}".format(bot_info.first_name))
     if bot_info.dc_id:
-        print(f"  DC  : {bot_info.dc_id}")
-    print(f"  URL : {Server.URL}\n")
-
+        print("                        DC ID =>> {}".format(str(bot_info.dc_id)))
+    print(" URL =>> {}".format(Server.URL))
+    print("------------------------------------------------------------------")
     await idle()
-
 
 async def cleanup():
     await server.cleanup()
     await FileStream.stop()
-
 
 if __name__ == "__main__":
     try:
         loop.run_until_complete(start_services())
     except KeyboardInterrupt:
         pass
-    except Exception:
+    except Exception as err:
         logging.error(traceback.format_exc())
     finally:
         loop.run_until_complete(cleanup())
         loop.stop()
-        print("Services stopped.")
+        print("------------------------ Stopped Services ------------------------")
