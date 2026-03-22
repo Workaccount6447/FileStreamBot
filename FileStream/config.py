@@ -19,7 +19,7 @@ class Telegram:
     FILE_PIC = env.get('FILE_PIC', "https://graph.org/file/5bb9935be0229adf98b73.jpg")
     START_PIC = env.get('START_PIC', "https://file-to-link-x-c97f657694b4.herokuapp.com/dl/6978e7b0bbd8c84b861e8b91")
     VERIFY_PIC = env.get('VERIFY_PIC', "https://file-to-link-x-c97f657694b4.herokuapp.com/dl/6978e7d1bbd8c84b861e8b93")
-    MULTI_CLIENT = False
+    MULTI_CLIENT = True
     FLOG_CHANNEL = int(env.get("FLOG_CHANNEL", None))   # Logs channel for file logs
     ULOG_CHANNEL = int(env.get("ULOG_CHANNEL", None))   # Logs channel for user logs
     MODE = env.get("MODE", "primary")
