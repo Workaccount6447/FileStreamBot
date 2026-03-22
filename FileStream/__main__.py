@@ -39,8 +39,9 @@ try:
 except ImportError:
     logging.info("uvloop not found — using default asyncio")
 
-# ── Use get_event_loop() like original — safer with pyrofork's idle() ──────────
-loop = asyncio.get_event_loop()
+# ── Create event loop explicitly — works with both uvloop and default asyncio ──
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
 
 server = web.AppRunner(
     web_server(),
