@@ -25,7 +25,6 @@ class ByteStreamer:
         self.max_buffer = 6                             # buffer up to 6 chunks ahead
 
         # locks
-        self.invoke_lock = asyncio.Lock()
         self.dc_locks = {}
 
         asyncio.create_task(self.clean_cache())
@@ -190,17 +189,16 @@ class ByteStreamer:
 
                 location = await self.get_location(file_id)
 
-                async with self.invoke_lock:
-                    r = await asyncio.wait_for(
-                        session.invoke(
-                            raw.functions.upload.GetFile(
-                                location=location,
-                                offset=offset,
-                                limit=chunk_size
-                            )
-                        ),
-                        timeout=30
-                    )
+                r = await asyncio.wait_for(
+                    session.invoke(
+                        raw.functions.upload.GetFile(
+                            location=location,
+                            offset=offset,
+                            limit=chunk_size
+                        )
+                    ),
+                    timeout=30
+                )
 
                 if not isinstance(r, raw.types.upload.File):
                     return None
