@@ -18,17 +18,14 @@ class ByteStreamer:
         # cache
         self.cached_file_ids: Dict[str, FileId] = {}
 
-        # --- tuned for Koyeb free (512 MB RAM, shared CPU) ---
-        # RAM budget per stream  = parallel_workers × max_buffer × chunk_size
-        #                        = 3 × 4 × 512 KB = 6 MB/stream
-        # Total worst-case RAM   = global_semaphore × 6 MB = 4 × 6 MB = 24 MB
-        # That leaves plenty of headroom for Python + pyrogram overhead.
-        self.clean_timer      = 30 * 60
-        self.global_semaphore = asyncio.Semaphore(4)   # max 4 concurrent streams
-        self.parallel_workers = 3                       # 3 chunk fetchers per stream
-        self.max_buffer       = 4                       # 4 chunks ahead in memory
+        # limits — tuned for 512 KB chunks
+        self.clean_timer = 30 * 60
+        self.global_semaphore = asyncio.Semaphore(4)   # allow more concurrent streams
+        self.parallel_workers = 3                       # prefetch 3 chunks at once
+        self.max_buffer = 6                             # buffer up to 6 chunks ahead
 
-        # per-DC session locks (session creation only, not invoke calls)
+        # locks — per-DC instead of one global lock
+        self.dc_invoke_locks = {}
         self.dc_locks = {}
 
         asyncio.create_task(self.clean_cache())
@@ -175,30 +172,36 @@ class ByteStreamer:
 
     async def fetch_chunk(
         self,
-        session,      # pre-resolved once per stream — no per-chunk lookup
-        location,     # pre-resolved once per stream — no per-chunk build
         file_id,
         offset,
         chunk_size,
         db_id,
         multi_clients
     ):
+
         retries = 0
 
         while True:
             try:
-                # No invoke_lock — Pyrogram sessions are safe for concurrent calls.
-                # The 3 workers per stream all send requests simultaneously.
-                r = await asyncio.wait_for(
-                    session.invoke(
-                        raw.functions.upload.GetFile(
-                            location=location,
-                            offset=offset,
-                            limit=chunk_size
-                        )
-                    ),
-                    timeout=30
+                session = await self.generate_media_session(
+                    self.client,
+                    file_id
                 )
+
+                location = await self.get_location(file_id)
+
+                dc_invoke_lock = self.dc_invoke_locks.setdefault(file_id.dc_id, asyncio.Lock())
+                async with dc_invoke_lock:
+                    r = await asyncio.wait_for(
+                        session.invoke(
+                            raw.functions.upload.GetFile(
+                                location=location,
+                                offset=offset,
+                                limit=chunk_size
+                            )
+                        ),
+                        timeout=30
+                    )
 
                 if not isinstance(r, raw.types.upload.File):
                     return None
@@ -212,20 +215,30 @@ class ByteStreamer:
                     logging.error(f"Chunk failed permanently: {e}")
                     return None
 
-                wait = min(2 ** retries, 16)
-                logging.warning(f"Chunk retry {retries}: {e}")
+                is_expired = "FILE_REFERENCE_EXPIRED" in str(e)
 
-                await self.close_dc(file_id.dc_id)
-
-                try:
+                if is_expired:
+                    logging.warning(f"File reference expired, refreshing... (retry {retries})")
                     if db_id and multi_clients:
-                        file_id = await self.get_file_properties(db_id, multi_clients)
-                    session  = await self.generate_media_session(self.client, file_id)
-                    location = await self.get_location(file_id)
-                except Exception:
-                    pass
-
-                await asyncio.sleep(wait)
+                        try:
+                            self.cached_file_ids.pop(db_id, None)
+                            file_id = await self.get_file_properties(db_id, multi_clients)
+                        except Exception as refresh_err:
+                            logging.error(f"Failed to refresh file reference: {refresh_err}")
+                            return None
+                    else:
+                        logging.error("Cannot refresh file reference: no db_id or multi_clients")
+                        return None
+                else:
+                    wait = 2 ** retries
+                    logging.warning(f"Chunk retry {retries}: {e}")
+                    await self.close_dc(file_id.dc_id)
+                    if db_id and multi_clients:
+                        try:
+                            file_id = await self.get_file_properties(db_id, multi_clients)
+                        except:
+                            pass
+                    await asyncio.sleep(wait)
 
     # --------------------------------------------------
 
@@ -241,30 +254,26 @@ class ByteStreamer:
         db_id=None,
         multi_clients=None
     ):
+
         async with self.global_semaphore:
 
             workers = []
 
             try:
-                # Resolve session + location ONCE per stream, not once per chunk.
-                session  = await self.generate_media_session(self.client, file_id)
-                location = await self.get_location(file_id)
 
                 next_part = 0
-                current   = 0
-                buffer    = {}
+                current = 0
+                buffer = {}
 
-                part_lock  = asyncio.Lock()
+                lock = asyncio.Lock()
                 buffer_sem = asyncio.Semaphore(self.max_buffer)
-
-                # Event-driven consumer — no busy-wait sleep(0.001) loop.
-                chunk_ready = asyncio.Event()
 
                 async def worker():
                     nonlocal next_part
 
                     while True:
-                        async with part_lock:
+
+                        async with lock:
                             part = next_part
                             next_part += 1
 
@@ -276,8 +285,6 @@ class ByteStreamer:
                         part_offset = offset + part * chunk_size
 
                         data = await self.fetch_chunk(
-                            session,
-                            location,
                             file_id,
                             part_offset,
                             chunk_size,
@@ -286,7 +293,6 @@ class ByteStreamer:
                         )
 
                         buffer[part] = data
-                        chunk_ready.set()
 
                 workers = [
                     asyncio.create_task(worker())
@@ -296,9 +302,7 @@ class ByteStreamer:
                 while current < part_count:
 
                     if current not in buffer:
-                        chunk_ready.clear()
-                        if current not in buffer:
-                            await chunk_ready.wait()
+                        await asyncio.sleep(0.001)
                         continue
 
                     chunk = buffer.pop(current)
