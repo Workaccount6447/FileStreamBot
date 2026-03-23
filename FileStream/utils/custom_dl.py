@@ -177,18 +177,14 @@ class ByteStreamer:
         db_id,
         multi_clients
     ):
+        # Generate session once, reuse for all retries
+        session = await self.generate_media_session(self.client, file_id)
+        location = await self.get_location(file_id)
 
         retries = 0
 
         while True:
             try:
-                session = await self.generate_media_session(
-                    self.client,
-                    file_id
-                )
-
-                location = await self.get_location(file_id)
-
                 r = await asyncio.wait_for(
                     session.invoke(
                         raw.functions.upload.GetFile(
@@ -208,25 +204,26 @@ class ByteStreamer:
             except Exception as e:
 
                 retries += 1
-                if retries >= 6:
+                if retries >= 3:
                     logging.error(f"Chunk failed permanently: {e}")
                     return None
 
-                wait = 2 ** retries
+                err = str(e)
                 logging.warning(f"Chunk retry {retries}: {e}")
 
-                await self.close_dc(file_id.dc_id)
-
-                if db_id and multi_clients:
-                    try:
-                        file_id = await self.get_file_properties(
-                            db_id,
-                            multi_clients
-                        )
-                    except:
-                        pass
-
-                await asyncio.sleep(wait)
+                if "FILE_REFERENCE_EXPIRED" in err:
+                    if db_id and multi_clients:
+                        try:
+                            self.cached_file_ids.pop(db_id, None)
+                            file_id = await self.get_file_properties(db_id, multi_clients)
+                            session = await self.generate_media_session(self.client, file_id)
+                            location = await self.get_location(file_id)
+                        except:
+                            return None
+                    else:
+                        return None
+                else:
+                    await asyncio.sleep(1)
 
     # --------------------------------------------------
 
@@ -256,6 +253,8 @@ class ByteStreamer:
                 lock = asyncio.Lock()
                 buffer_sem = asyncio.Semaphore(self.max_buffer)
 
+                chunk_ready = asyncio.Event()
+
                 async def worker():
                     nonlocal next_part
 
@@ -281,6 +280,7 @@ class ByteStreamer:
                         )
 
                         buffer[part] = data
+                        chunk_ready.set()
 
                 workers = [
                     asyncio.create_task(worker())
@@ -290,7 +290,9 @@ class ByteStreamer:
                 while current < part_count:
 
                     if current not in buffer:
-                        await asyncio.sleep(0.001)
+                        chunk_ready.clear()
+                        if current not in buffer:
+                            await chunk_ready.wait()
                         continue
 
                     chunk = buffer.pop(current)
