@@ -18,13 +18,14 @@ class ByteStreamer:
         # cache
         self.cached_file_ids: Dict[str, FileId] = {}
 
-        # limits — tuned for Koyeb free plan (0.1 vCPU, 512MB RAM)
+        # limits — tuned for 512 KB chunks
         self.clean_timer = 30 * 60
-        self.global_semaphore = asyncio.Semaphore(2)   # max 2 concurrent streams
-        self.parallel_workers = 2                       # 2 chunks fetched in parallel
-        self.max_buffer = 4                             # small buffer to save RAM
+        self.global_semaphore = asyncio.Semaphore(4)   # allow more concurrent streams
+        self.parallel_workers = 3                       # prefetch 3 chunks at once
+        self.max_buffer = 6                             # buffer up to 6 chunks ahead
 
-        # locks — per-DC instead of one global lock
+        # locks
+        self.invoke_lock = asyncio.Lock()
         self.dc_locks = {}
 
         asyncio.create_task(self.clean_cache())
@@ -189,16 +190,17 @@ class ByteStreamer:
 
                 location = await self.get_location(file_id)
 
-                r = await asyncio.wait_for(
-                    session.invoke(
-                        raw.functions.upload.GetFile(
-                            location=location,
-                            offset=offset,
-                            limit=chunk_size
-                        )
-                    ),
-                    timeout=30
-                )
+                async with self.invoke_lock:
+                    r = await asyncio.wait_for(
+                        session.invoke(
+                            raw.functions.upload.GetFile(
+                                location=location,
+                                offset=offset,
+                                limit=chunk_size
+                            )
+                        ),
+                        timeout=30
+                    )
 
                 if not isinstance(r, raw.types.upload.File):
                     return None
@@ -212,19 +214,16 @@ class ByteStreamer:
                     logging.error(f"Chunk failed permanently: {e}")
                     return None
 
-                is_expired = "FILE_REFERENCE_EXPIRED" in str(e)
-
-                if is_expired:
+                if "FILE_REFERENCE_EXPIRED" in str(e):
                     logging.warning(f"File reference expired, refreshing... (retry {retries})")
                     if db_id and multi_clients:
                         try:
                             self.cached_file_ids.pop(db_id, None)
                             file_id = await self.get_file_properties(db_id, multi_clients)
-                        except Exception as refresh_err:
-                            logging.error(f"Failed to refresh file reference: {refresh_err}")
+                        except Exception as ref_err:
+                            logging.error(f"Failed to refresh file reference: {ref_err}")
                             return None
                     else:
-                        logging.error("Cannot refresh file reference: no db_id or multi_clients")
                         return None
                 else:
                     wait = 2 ** retries
@@ -252,10 +251,11 @@ class ByteStreamer:
         multi_clients=None
     ):
 
-        await self.global_semaphore.acquire()
-        workers = []
+        async with self.global_semaphore:
 
-        try:
+            workers = []
+
+            try:
 
                 next_part = 0
                 current = 0
@@ -321,8 +321,8 @@ class ByteStreamer:
 
                     current += 1
 
-        finally:
-            for w in workers:
-                w.cancel()
-            await asyncio.gather(*workers, return_exceptions=True)
-            self.global_semaphore.release()
+            finally:
+                for w in workers:
+                    w.cancel()
+
+                await asyncio.gather(*workers, return_exceptions=True)
