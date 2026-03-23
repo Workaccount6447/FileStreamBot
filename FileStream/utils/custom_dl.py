@@ -214,27 +214,21 @@ class ByteStreamer:
                     logging.error(f"Chunk failed permanently: {e}")
                     return None
 
-                if "FILE_REFERENCE_EXPIRED" in str(e):
-                    logging.warning(f"File reference expired, refreshing... (retry {retries})")
-                    if db_id and multi_clients:
-                        try:
-                            self.cached_file_ids.pop(db_id, None)
-                            file_id = await self.get_file_properties(db_id, multi_clients)
-                        except Exception as ref_err:
-                            logging.error(f"Failed to refresh file reference: {ref_err}")
-                            return None
-                    else:
-                        return None
-                else:
-                    wait = 2 ** retries
-                    logging.warning(f"Chunk retry {retries}: {e}")
-                    await self.close_dc(file_id.dc_id)
-                    if db_id and multi_clients:
-                        try:
-                            file_id = await self.get_file_properties(db_id, multi_clients)
-                        except:
-                            pass
-                    await asyncio.sleep(wait)
+                wait = 2 ** retries
+                logging.warning(f"Chunk retry {retries}: {e}")
+
+                await self.close_dc(file_id.dc_id)
+
+                if db_id and multi_clients:
+                    try:
+                        file_id = await self.get_file_properties(
+                            db_id,
+                            multi_clients
+                        )
+                    except:
+                        pass
+
+                await asyncio.sleep(wait)
 
     # --------------------------------------------------
 
