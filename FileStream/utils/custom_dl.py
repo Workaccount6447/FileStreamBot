@@ -171,16 +171,14 @@ class ByteStreamer:
 
     async def fetch_chunk(
         self,
+        session,
+        location,
         file_id,
         offset,
         chunk_size,
         db_id,
         multi_clients
     ):
-        # Generate session once, reuse for all retries
-        session = await self.generate_media_session(self.client, file_id)
-        location = await self.get_location(file_id)
-
         retries = 0
 
         while True:
@@ -202,16 +200,14 @@ class ByteStreamer:
                 return r.bytes
 
             except Exception as e:
-
                 retries += 1
-                if retries >= 3:
+                if retries >= 6:
                     logging.error(f"Chunk failed permanently: {e}")
                     return None
 
-                err = str(e)
                 logging.warning(f"Chunk retry {retries}: {e}")
 
-                if "FILE_REFERENCE_EXPIRED" in err:
+                if "FILE_REFERENCE_EXPIRED" in str(e):
                     if db_id and multi_clients:
                         try:
                             self.cached_file_ids.pop(db_id, None)
@@ -223,7 +219,7 @@ class ByteStreamer:
                     else:
                         return None
                 else:
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(2 ** retries)
 
     # --------------------------------------------------
 
@@ -246,14 +242,16 @@ class ByteStreamer:
 
             try:
 
+                # Generate session and location ONCE for all workers
+                session = await self.generate_media_session(self.client, file_id)
+                location = await self.get_location(file_id)
+
                 next_part = 0
                 current = 0
                 buffer = {}
 
                 lock = asyncio.Lock()
                 buffer_sem = asyncio.Semaphore(self.max_buffer)
-
-                chunk_ready = asyncio.Event()
 
                 async def worker():
                     nonlocal next_part
@@ -272,6 +270,8 @@ class ByteStreamer:
                         part_offset = offset + part * chunk_size
 
                         data = await self.fetch_chunk(
+                            session,
+                            location,
                             file_id,
                             part_offset,
                             chunk_size,
@@ -280,7 +280,6 @@ class ByteStreamer:
                         )
 
                         buffer[part] = data
-                        chunk_ready.set()
 
                 workers = [
                     asyncio.create_task(worker())
@@ -290,9 +289,7 @@ class ByteStreamer:
                 while current < part_count:
 
                     if current not in buffer:
-                        chunk_ready.clear()
-                        if current not in buffer:
-                            await chunk_ready.wait()
+                        await asyncio.sleep(0.001)
                         continue
 
                     chunk = buffer.pop(current)
