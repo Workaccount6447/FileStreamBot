@@ -15,6 +15,8 @@ routes = web.RouteTableDef()
 
 @routes.get("/status", allow_head=True)
 async def root_route_handler(_):
+    # Small CPU task to prevent Koyeb from sleeping the instance
+    _ = sum(i * i for i in range(1000))
     return web.json_response(
         {
             "server_status": "running",
@@ -100,7 +102,7 @@ async def media_streamer(request: web.Request, db_id: str):
             headers={"Content-Range": f"bytes */{file_size}"},
         )
 
-    chunk_size = 1024 * 1024  # 1 MB chunks for maximum throughput
+    chunk_size = 512 * 1024  # 512 KB chunks for faster initial response
     until_bytes = min(until_bytes, file_size - 1)
 
     offset = from_bytes - (from_bytes % chunk_size)
