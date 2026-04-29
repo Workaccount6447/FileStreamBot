@@ -34,7 +34,7 @@ async def root_route_handler(_):
     )
 
 @routes.get("/watch/{path}", allow_head=True)
-async def stream_handler(request: web.Request):
+async def watch_handler(request: web.Request):
     try:
         path = request.match_info["path"]
         return web.Response(text=await render_page(path), content_type='text/html')
@@ -126,14 +126,26 @@ async def media_streamer(request: web.Request, db_id: str):
     # if "video/" in mime_type or "audio/" in mime_type:
     #     disposition = "inline"
 
-    return web.Response(
+    response = web.StreamResponse(
         status=206 if range_header else 200,
-        body=body,
         headers={
-            "Content-Type": f"{mime_type}",
+            "Content-Type": mime_type,
             "Content-Range": f"bytes {from_bytes}-{until_bytes}/{file_size}",
             "Content-Length": str(req_length),
             "Content-Disposition": f'{disposition}; filename="{file_name}"',
             "Accept-Ranges": "bytes",
         },
     )
+
+    await response.prepare(request)
+
+    try:
+        async for chunk in body:
+            await response.write(chunk)
+    except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+        # Client disconnected mid-stream — not an error
+        pass
+    finally:
+        await response.write_eof()
+
+    return response
